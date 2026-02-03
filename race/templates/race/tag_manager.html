@@ -1,219 +1,302 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
+<meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>Tag Manager</title>
+<title>Race Display</title>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; padding: 30px; }
-  h1 { text-align: center; margin-bottom: 24px; font-size: 1.6rem; color: #fff; }
-  #dropdown-wrap { max-width: 420px; margin: 0 auto 28px; }
-  select { width: 100%; padding: 10px 14px; border-radius: 8px; border: 1px solid #3a3f5c; background: #1e2130; color: #e2e8f0; font-size: 1rem; cursor: pointer; outline: none; }
-  select:focus { border-color: #6c63ff; }
-
-  .round-block { max-width: 760px; margin: 0 auto 20px; }
-  .round-title { font-size: 1.1rem; font-weight: 600; color: #6c63ff; margin-bottom: 10px; border-bottom: 1px solid #2e3148; padding-bottom: 6px; }
-  .group-card { background: #1e2130; border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; border: 1px solid #2e3148; }
-  .group-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-  .group-name { font-weight: 600; color: #fff; font-size: 0.95rem; }
-  .status-badge { font-size: 0.72rem; padding: 3px 9px; border-radius: 12px; background: #2e3148; color: #94a3b8; text-transform: capitalize; }
-  .status-badge.live { background: #16a34a33; color: #4ade80; }
-  .status-badge.finished { background: #7c3aed33; color: #a78bfa; }
-
-  .player-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid #2a2d3e; }
-  .player-row:last-child { border-bottom: none; }
-  .player-name { flex: 1; font-size: 0.88rem; color: #cbd5e1; }
-  .player-name.empty { color: #4a4f6a; font-style: italic; }
-  .player-status { font-size: 0.7rem; width: 72px; text-align: center; padding: 2px 6px; border-radius: 10px; background: #2e3148; color: #94a3b8; }
-  .tag-input { width: 160px; padding: 5px 9px; border-radius: 6px; border: 1px solid #3a3f5c; background: #151720; color: #e2e8f0; font-size: 0.85rem; outline: none; }
-  .tag-input:focus { border-color: #6c63ff; }
-  .tag-input:disabled { opacity: 0.35; cursor: not-allowed; }
-  .save-indicator { font-size: 0.7rem; width: 48px; color: #64748b; text-align: right; }
-  .save-indicator.saving { color: #fbbf24; }
-  .save-indicator.saved  { color: #4ade80; }
-
-  #content { max-width: 760px; margin: 0 auto; }
-  .placeholder { text-align: center; color: #4a4f6a; margin-top: 60px; font-size: 0.95rem; }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#0f1117;color:#e2e8f0;font-family:'Segoe UI',sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  .top{display:flex;align-items:center;gap:14px;padding:10px 18px;background:#1a1d2e;border-bottom:1px solid #2e3148;flex-shrink:0}
+  .top select{padding:8px 12px;border-radius:6px;border:1px solid #3a3f5c;background:#151720;color:#e2e8f0;font-size:.9rem;min-width:200px;outline:none;cursor:pointer}
+  .top select:focus{border-color:#6c63ff}
+  .ws{font-size:.78rem;padding:3px 10px;border-radius:12px;background:#2e3148;color:#94a3b8}
+  .ws.on{background:#16a34a33;color:#4ade80}
+  .ws.off{background:#dc262633;color:#f87171}
+  .body{display:flex;flex:1;overflow:hidden}
+  .cv-wrap{flex:1;display:flex;align-items:center;justify-content:center;padding:12px}
+  canvas{border-radius:10px;border:1px solid #2e3148;background:#151720}
+  .side{width:240px;background:#1a1d2e;border-left:1px solid #2e3148;overflow-y:auto;padding:12px;flex-shrink:0}
+  .side h3{font-size:.9rem;color:#6c63ff;margin-bottom:10px;border-bottom:1px solid #2e3148;padding-bottom:5px}
+  .card{background:#151720;border-radius:8px;padding:9px 11px;margin-bottom:7px;border-left:4px solid #2e3148;display:flex;align-items:center;gap:9px}
+  .card.live{border-left-color:var(--c)}
+  .card .name{font-size:.85rem;font-weight:600;color:#fff}
+  .card .info{font-size:.72rem;color:#64748b;margin-top:2px}
+  .card .pos{font-size:.72rem;color:#4ade80;font-weight:600}
+  .ph{color:#4a4f6a;font-size:.85rem;text-align:center;padding:30px 0}
 </style>
 </head>
 <body>
 
-<h1>🏷️ Tag Manager</h1>
-
-<div id="dropdown-wrap">
-  <select id="tournamentSelect" onchange="loadStructure()">
-    <option value="">— Select a Tournament —</option>
-  </select>
+<div class="top">
+  <select id="tSel" onchange="loadGroups()"><option value="">— Tournament —</option></select>
+  <select id="gSel" onchange="selectGroup()" disabled><option value="">— Group —</option></select>
+  <span class="ws off" id="wsS">● Disconnected</span>
 </div>
 
-<div id="content">
-  <p class="placeholder" id="placeholder">Select a tournament to view rounds & groups.</p>
+<div class="body">
+  <div class="cv-wrap"><canvas id="c" width="780" height="560"></canvas></div>
+  <div class="side">
+    <h3>🏁 Players</h3>
+    <div id="lb"><p class="ph">Select a group</p></div>
+  </div>
 </div>
 
 <script>
+// ─── CONFIG ───
 const BASE = 'https://xraceapi.zyberspace.in';
-const API = {
-  list:      BASE + '/api/tournaments/',
-  structure: BASE + '/api/tournament-structure/',
-  updateTag: BASE + '/api/update-tag-id/',
-};
+const API  = { list: BASE+'/api/tournaments/', struct: BASE+'/api/tournament-structure/', players: BASE+'/api/group-players/' };
 
-// ── fetch helper ──
-async function api(url, method = 'GET', body = null) {
-  const opts = {
-    method,
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',  // sends cookies (session/csrf) cross-origin if needed
-  };
-  if (body) opts.body = JSON.stringify(body);
+// WebSocket connects to YOUR local Django (not xraceapi)
+const WS_URL = `ws://${window.location.host}/ws/race/`;
 
-  // CSRF token — try cookie first, fallback to meta tag
-  if (method !== 'GET') {
-    const csrfCookie = document.cookie.match(/csrftoken=([^;]+)/);
-    const csrfMeta   = document.querySelector('meta[name="csrf-token"]');
-    const token      = csrfCookie ? csrfCookie[1] : (csrfMeta ? csrfMeta.content : null);
-    if (token) opts.headers['X-CSRFToken'] = token;
-  }
+// Anchor positions in cm — match your physical setup
+const ANC = [{x:0,y:0},{x:430,y:0},{x:430,y:470},{x:0,y:470}];
 
-  const res = await fetch(url, opts);
-  if (!res.ok) throw new Error(`API error ${res.status}`);
-  return res.json();
+const COLORS = ['#ff4757','#2ed573','#1e90ff','#ffa502','#a55eea','#ff6b81','#26de81','#45aaf2'];
+
+// ─── STATE ───
+let players = [];          // [{name, tag_id, color}]
+let tagData  = {};         // { tag_id: {x, y, trail:[], lastTime} }
+let watchTags = new Set(); // tag_ids for current group
+
+// ─── CANVAS ───
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+let scale, offX, offY;
+
+function calcLayout() {
+  const pad = 55;
+  const maxX = Math.max(...ANC.map(a=>a.x));
+  const maxY = Math.max(...ANC.map(a=>a.y));
+  scale = Math.min((canvas.width-pad*2)/maxX, (canvas.height-pad*2)/maxY) * 0.85;
+  offX  = (canvas.width  - maxX*scale) / 2;
+  offY  = (canvas.height - maxY*scale) / 2;
+}
+calcLayout();
+
+// cm → pixel (Y flipped)
+function toP(cx,cy){ return { px: offX+cx*scale, py: canvas.height-offY-cy*scale }; }
+
+// ─── TRILATERATION ───
+function trilaterate(ranges) {
+  const v = [];
+  ranges.forEach((r,i) => { if(r>0 && i<ANC.length) v.push({ax:ANC[i].x, ay:ANC[i].y, r}); });
+  if(v.length<3) return null;
+
+  const [a,b,c] = v;
+  const A=2*(b.ax-a.ax), B=2*(b.ay-a.ay);
+  const C=a.r**2-b.r**2-a.ax**2+b.ax**2-a.ay**2+b.ay**2;
+  const D=2*(c.ax-b.ax), E=2*(c.ay-b.ay);
+  const F=b.r**2-c.r**2-b.ax**2+c.ax**2-b.ay**2+c.ay**2;
+  const den=A*E-B*D;
+  if(Math.abs(den)<0.001) return null;
+  return { x:(C*E-F*B)/den, y:(A*F-C*D)/den };
 }
 
-// ── 1. Load tournaments into dropdown ──
-async function loadTournaments() {
-  try {
-    const { data } = await api(API.list);
-    const sel = document.getElementById('tournamentSelect');
-    data.forEach(t => {
-      const opt = document.createElement('option');
-      opt.value = t.slug;
-      opt.textContent = t.name;
-      sel.appendChild(opt);
-    });
-  } catch (e) {
-    console.error('Failed to load tournaments:', e);
-    document.getElementById('content').innerHTML =
-      '<p class="placeholder" style="color:#f87171">Failed to load tournaments. Check API or network.</p>';
-  }
-}
+// ─── DRAW LOOP ───
+function draw() {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
 
-// ── 2. Load structure when tournament selected ──
-async function loadStructure() {
-  const slug    = document.getElementById('tournamentSelect').value;
-  const content = document.getElementById('content');
+  // Grid
+  ctx.strokeStyle='#1e2130'; ctx.lineWidth=1;
+  const mxX=Math.max(...ANC.map(a=>a.x)), mxY=Math.max(...ANC.map(a=>a.y));
+  for(let x=0;x<=mxX;x+=50){ const a=toP(x,0),b=toP(x,mxY); ctx.beginPath();ctx.moveTo(a.px,a.py);ctx.lineTo(b.px,b.py);ctx.stroke(); }
+  for(let y=0;y<=mxY;y+=50){ const a=toP(0,y),b=toP(mxX,y); ctx.beginPath();ctx.moveTo(a.px,a.py);ctx.lineTo(b.px,b.py);ctx.stroke(); }
 
-  if (!slug) {
-    content.innerHTML = '<p class="placeholder">Select a tournament to view rounds & groups.</p>';
-    return;
-  }
+  // Boundary
+  ctx.strokeStyle='#6c63ff'; ctx.lineWidth=2.5; ctx.beginPath();
+  ANC.forEach((a,i)=>{ const p=toP(a.x,a.y); i===0?ctx.moveTo(p.px,p.py):ctx.lineTo(p.px,p.py); });
+  ctx.closePath(); ctx.stroke();
 
-  content.innerHTML = '<p class="placeholder">Loading…</p>';
-
-  try {
-    const { data } = await api(API.structure + '?slug=' + slug);
-    renderRounds(data.rounds);
-  } catch (e) {
-    console.error('Failed to load structure:', e);
-    content.innerHTML = '<p class="placeholder" style="color:#f87171">Failed to load tournament structure.</p>';
-  }
-}
-
-// ── 3. Render rounds → groups → players ──
-function renderRounds(rounds) {
-  const content = document.getElementById('content');
-  content.innerHTML = '';
-
-  rounds.forEach(round => {
-    const block = document.createElement('div');
-    block.className = 'round-block';
-
-    let label = `Round ${round.round_no} — ${round.round_name}`;
-    if (round.is_final) label += ' 🏆 (Final)';
-    block.innerHTML = `<div class="round-title">${label}</div>`;
-
-    round.groups.forEach(group => {
-      block.appendChild(buildGroupCard(group));
-    });
-
-    content.appendChild(block);
-  });
-}
-
-function buildGroupCard(group) {
-  const card = document.createElement('div');
-  card.className = 'group-card';
-
-  const statusClass = group.group_status === 'live' ? 'live'
-                    : group.group_status === 'finished' ? 'finished' : '';
-
-  card.innerHTML = `
-    <div class="group-header">
-      <span class="group-name">${group.group_name}</span>
-      <span class="status-badge ${statusClass}">${group.group_status || 'upcoming'}</span>
-    </div>`;
-
-  group.players.forEach(p => {
-    card.appendChild(buildPlayerRow(p));
+  // Anchor labels
+  ANC.forEach((a,i)=>{
+    const p=toP(a.x,a.y);
+    ctx.fillStyle='#6c63ff'; ctx.beginPath();ctx.arc(p.px,p.py,6,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#94a3b8'; ctx.font='11px Segoe UI'; ctx.fillText('A'+i,p.px+9,p.py-7);
   });
 
-  return card;
-}
+  // Players: trail + dot + label — ONLY if data exists for their tag
+  const now = Date.now();
+  players.forEach(pl => {
+    if(!pl.tag_id || !tagData[pl.tag_id]) return;   // no data yet → skip, don't draw
 
-function buildPlayerRow(p) {
-  const row = document.createElement('div');
-  row.className = 'player-row';
-  const hasPlayer = p.player_id !== null;
+    const d = tagData[pl.tag_id];
 
-  row.innerHTML = `
-    <span class="player-name ${hasPlayer ? '' : 'empty'}">${p.player_name}</span>
-    <span class="player-status">${p.player_status}</span>
-    <input class="tag-input" type="text" value="${p.tag_id || ''}" placeholder="Tag ID"
-           data-gp-id="${p.gp_id}" ${hasPlayer ? '' : 'disabled'}
-           onblur="updateTag(this)"
-           onkeydown="if(event.key==='Enter'){event.preventDefault();updateTag(this)}" />
-    <span class="save-indicator" id="ind-${p.gp_id}"></span>`;
+    // If no update in last 3 seconds, don't draw (stale)
+    if(now - d.lastTime > 3000) return;
 
-  return row;
-}
-
-// ── 4. PATCH tag_id on blur / Enter ──
-async function updateTag(input) {
-  const gpId  = input.dataset.gpId;
-  const tagId = input.value.trim();
-  const ind   = document.getElementById('ind-' + gpId);
-
-  // skip if nothing changed and field is empty
-  if (!tagId && !input.dataset.lastSaved) return;
-  // skip if value hasn't changed from last saved
-  if (tagId === (input.dataset.lastSaved || '')) return;
-
-  ind.textContent = '…';
-  ind.className   = 'save-indicator saving';
-
-  try {
-    const res = await api(API.updateTag, 'PATCH', { gp_id: gpId, tag_id: tagId });
-
-    if (res.success) {
-      input.dataset.lastSaved = tagId;  // track last saved value
-      ind.textContent = '✓';
-      ind.className   = 'save-indicator saved';
-      setTimeout(() => { ind.textContent = ''; ind.className = 'save-indicator'; }, 2000);
-    } else {
-      ind.textContent = '✗';
-      ind.className   = 'save-indicator saving';
-      setTimeout(() => { ind.textContent = ''; ind.className = 'save-indicator'; }, 2500);
+    // Trail
+    if(d.trail.length>1){
+      ctx.strokeStyle=pl.color; ctx.lineWidth=2.5; ctx.globalAlpha=0.35;
+      ctx.beginPath();
+      d.trail.forEach((pt,i)=>{ const p=toP(pt.x,pt.y); i===0?ctx.moveTo(p.px,p.py):ctx.lineTo(p.px,p.py); });
+      ctx.stroke(); ctx.globalAlpha=1;
     }
-  } catch (e) {
-    console.error('Failed to update tag_id:', e);
-    ind.textContent = '✗';
-    ind.className   = 'save-indicator saving';
-    setTimeout(() => { ind.textContent = ''; ind.className = 'save-indicator'; }, 2500);
-  }
+
+    // Car dot + glow
+    const p=toP(d.x, d.y);
+    ctx.shadowColor=pl.color; ctx.shadowBlur=14;
+    ctx.fillStyle=pl.color; ctx.beginPath();ctx.arc(p.px,p.py,11,0,Math.PI*2);ctx.fill();
+    ctx.shadowBlur=0;
+
+    // White ring
+    ctx.strokeStyle='#fff'; ctx.lineWidth=2.5;
+    ctx.beginPath();ctx.arc(p.px,p.py,11,0,Math.PI*2);ctx.stroke();
+
+    // Name label above
+    ctx.fillStyle='#fff'; ctx.font='bold 13px Segoe UI'; ctx.textAlign='center';
+    ctx.fillText(pl.name, p.px, p.py-18);
+    ctx.textAlign='left';
+  });
+
+  requestAnimationFrame(draw);
+}
+draw();
+
+// ─── WEBSOCKET ───
+let ws;
+function connectWS(){
+  if(ws) ws.close();
+  ws = new WebSocket(WS_URL);
+
+  ws.onopen = ()=>{
+    document.getElementById('wsS').className='ws on';
+    document.getElementById('wsS').textContent='● Connected';
+  };
+  ws.onclose = ()=>{
+    document.getElementById('wsS').className='ws off';
+    document.getElementById('wsS').textContent='● Disconnected';
+    setTimeout(connectWS, 2000); // auto-reconnect
+  };
+  ws.onerror = ()=>{};
+
+  ws.onmessage = (e)=>{
+    const msg = JSON.parse(e.data);
+    if(msg.type !== 'tag_position') return;
+
+    const tid = msg.tag_id;
+
+    // ONLY process if this tag belongs to selected group
+    if(!watchTags.has(tid)) return;
+
+    const pos = trilaterate(msg.range);
+    if(!pos) return;
+
+    // Init
+    if(!tagData[tid]) tagData[tid] = {x:0, y:0, trail:[], lastTime:0};
+
+    tagData[tid].x = pos.x;
+    tagData[tid].y = pos.y;
+    tagData[tid].lastTime = Date.now();
+
+    // Trail (keep 60 points)
+    tagData[tid].trail.push({x:pos.x, y:pos.y});
+    if(tagData[tid].trail.length > 60) tagData[tid].trail.shift();
+
+    // Update sidebar live
+    updateSidebar();
+  };
+}
+connectWS();
+
+// ─── API helper ───
+async function get(url){ return (await fetch(url,{credentials:'include'})).json(); }
+
+// ─── LOAD TOURNAMENTS ───
+async function loadTournaments(){
+  const {data} = await get(API.list);
+  const sel = document.getElementById('tSel');
+  data.forEach(t=>{
+    const o = document.createElement('option');
+    o.value = t.slug; o.textContent = t.name;
+    sel.appendChild(o);
+  });
 }
 
-// ── init ──
+// ─── LOAD GROUPS ───
+async function loadGroups(){
+  const slug = document.getElementById('tSel').value;
+  const gSel = document.getElementById('gSel');
+  gSel.innerHTML='<option value="">— Group —</option>';
+  gSel.disabled = true;
+  if(!slug) return;
+
+  const {data} = await get(API.struct+'?slug='+slug);
+  if(!data?.rounds) return;
+  gSel.disabled = false;
+
+  data.rounds.forEach(r=>{
+    const og = document.createElement('optgroup');
+    og.label = `Round ${r.round_no} — ${r.round_name}${r.is_final?' 🏆':''}`;
+    r.groups.forEach(g=>{
+      const o = document.createElement('option');
+      o.value = g.group_id;
+      o.textContent = g.group_name + (g.group_status?` [${g.group_status}]`:'');
+      og.appendChild(o);
+    });
+    gSel.appendChild(og);
+  });
+}
+
+// ─── SELECT GROUP → load players → set watchTags ───
+async function selectGroup(){
+  const gid = document.getElementById('gSel').value;
+
+  // Reset everything
+  players   = [];
+  tagData   = {};
+  watchTags = new Set();
+
+  if(!gid){ renderSidebar(); return; }
+
+  const {data} = await get(API.players+'?group_id='+gid);
+
+  data.forEach((p,i)=>{
+    players.push({ name: p.player_name, tag_id: p.tag_id, color: COLORS[i%COLORS.length] });
+    if(p.tag_id) watchTags.add(p.tag_id);  // from now on, WS will process these tags
+  });
+
+  renderSidebar();
+}
+
+// ─── SIDEBAR: show all players, mark live if data is flowing ───
+function renderSidebar(){
+  const lb = document.getElementById('lb');
+  if(!players.length){ lb.innerHTML='<p class="ph">No players</p>'; return; }
+
+  lb.innerHTML = players.map(p=>{
+    const hasData = p.tag_id && tagData[p.tag_id];
+    const isLive  = hasData && (Date.now()-tagData[p.tag_id].lastTime < 3000);
+    return `
+      <div class="card ${isLive?'live':''}" style="--c:${p.color}; ${isLive?'border-left-color:'+p.color:''}">
+        <div style="width:12px;height:12px;border-radius:50%;background:${isLive?p.color:'#2e3148'}"></div>
+        <div>
+          <div class="name">${p.name}</div>
+          <div class="info">
+            ${p.tag_id ? 'Tag: '+p.tag_id+'  ' : '<span style="color:#4a4f6a;font-style:italic">No tag</span>'}
+            ${isLive ? `<span class="pos" id="pos-${p.tag_id}">x:${tagData[p.tag_id].x.toFixed(0)} y:${tagData[p.tag_id].y.toFixed(0)}</span>` : (p.tag_id?'<span style="color:#4a4f6a">Waiting…</span>':'')}
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+// lightweight update — just swap the position text, no full re-render
+function updateSidebar(){
+  players.forEach(p=>{
+    if(!p.tag_id || !tagData[p.tag_id]) return;
+    const el = document.getElementById('pos-'+p.tag_id);
+    if(el){
+      el.textContent = `x:${tagData[p.tag_id].x.toFixed(0)} y:${tagData[p.tag_id].y.toFixed(0)}`;
+    } else {
+      // first time this tag got data — need full render to show it
+      renderSidebar();
+    }
+  });
+}
+
+// ─── INIT ───
 loadTournaments();
 </script>
 </body>
