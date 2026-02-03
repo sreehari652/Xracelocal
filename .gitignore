@@ -1,0 +1,18 @@
+# Ignore Django env file & pycache files
+\oenv
+*.pyc
+
+# Ignore Media files
+media
+.env
+myenv
+
+# Ignore Settings files
+settings.py
+
+# Ignore all migration files
+*/migrations/*.py
+*/migrations/*.pyc
+
+# Exclude the __init__.py files to keep the migrations directory structure
+!*/migrations/__init__.py
