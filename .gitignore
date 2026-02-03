@@ -16,3 +16,4 @@ settings.py
 
 # Exclude the __init__.py files to keep the migrations directory structure
 !*/migrations/__init__.py
+db.sqlite3
