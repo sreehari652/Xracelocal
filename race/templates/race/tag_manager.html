@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Tag Manager</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; padding: 30px; }
+  h1 { text-align: center; margin-bottom: 24px; font-size: 1.6rem; color: #fff; }
+  #dropdown-wrap { max-width: 420px; margin: 0 auto 28px; }
+  select { width: 100%; padding: 10px 14px; border-radius: 8px; border: 1px solid #3a3f5c; background: #1e2130; color: #e2e8f0; font-size: 1rem; cursor: pointer; outline: none; }
+  select:focus { border-color: #6c63ff; }
+
+  .round-block { max-width: 760px; margin: 0 auto 20px; }
+  .round-title { font-size: 1.1rem; font-weight: 600; color: #6c63ff; margin-bottom: 10px; border-bottom: 1px solid #2e3148; padding-bottom: 6px; }
+  .group-card { background: #1e2130; border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; border: 1px solid #2e3148; }
+  .group-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .group-name { font-weight: 600; color: #fff; font-size: 0.95rem; }
+  .status-badge { font-size: 0.72rem; padding: 3px 9px; border-radius: 12px; background: #2e3148; color: #94a3b8; text-transform: capitalize; }
+  .status-badge.live { background: #16a34a33; color: #4ade80; }
+  .status-badge.finished { background: #7c3aed33; color: #a78bfa; }
+
+  .player-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid #2a2d3e; }
+  .player-row:last-child { border-bottom: none; }
+  .player-name { flex: 1; font-size: 0.88rem; color: #cbd5e1; }
+  .player-name.empty { color: #4a4f6a; font-style: italic; }
+  .player-status { font-size: 0.7rem; width: 72px; text-align: center; padding: 2px 6px; border-radius: 10px; background: #2e3148; color: #94a3b8; }
+  .tag-input { width: 160px; padding: 5px 9px; border-radius: 6px; border: 1px solid #3a3f5c; background: #151720; color: #e2e8f0; font-size: 0.85rem; outline: none; }
+  .tag-input:focus { border-color: #6c63ff; }
+  .tag-input:disabled { opacity: 0.35; cursor: not-allowed; }
+  .save-indicator { font-size: 0.7rem; width: 48px; color: #64748b; text-align: right; }
+  .save-indicator.saving { color: #fbbf24; }
+  .save-indicator.saved  { color: #4ade80; }
+
+  #content { max-width: 760px; margin: 0 auto; }
+  .placeholder { text-align: center; color: #4a4f6a; margin-top: 60px; font-size: 0.95rem; }
+</style>
+</head>
+<body>
+
+<h1>🏷️ Tag Manager</h1>
+
+<div id="dropdown-wrap">
+  <select id="tournamentSelect" onchange="loadStructure()">
+    <option value="">— Select a Tournament —</option>
+  </select>
+</div>
+
+<div id="content">
+  <p class="placeholder" id="placeholder">Select a tournament to view rounds & groups.</p>
+</div>
+
+<script>
+const BASE = 'https://xraceapi.zyberspace.in';
+const API = {
+  list:      BASE + '/api/tournaments/',
+  structure: BASE + '/api/tournament-structure/',
+  updateTag: BASE + '/api/update-tag-id/',
+};
+
+// ── fetch helper ──
+async function api(url, method = 'GET', body = null) {
+  const opts = {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',  // sends cookies (session/csrf) cross-origin if needed
+  };
+  if (body) opts.body = JSON.stringify(body);
+
+  // CSRF token — try cookie first, fallback to meta tag
+  if (method !== 'GET') {
+    const csrfCookie = document.cookie.match(/csrftoken=([^;]+)/);
+    const csrfMeta   = document.querySelector('meta[name="csrf-token"]');
+    const token      = csrfCookie ? csrfCookie[1] : (csrfMeta ? csrfMeta.content : null);
+    if (token) opts.headers['X-CSRFToken'] = token;
+  }
+
+  const res = await fetch(url, opts);
+  if (!res.ok) throw new Error(`API error ${res.status}`);
+  return res.json();
+}
+
+// ── 1. Load tournaments into dropdown ──
+async function loadTournaments() {
+  try {
+    const { data } = await api(API.list);
+    const sel = document.getElementById('tournamentSelect');
+    data.forEach(t => {
+      const opt = document.createElement('option');
+      opt.value = t.slug;
+      opt.textContent = t.name;
+      sel.appendChild(opt);
+    });
+  } catch (e) {
+    console.error('Failed to load tournaments:', e);
+    document.getElementById('content').innerHTML =
+      '<p class="placeholder" style="color:#f87171">Failed to load tournaments. Check API or network.</p>';
+  }
+}
+
+// ── 2. Load structure when tournament selected ──
+async function loadStructure() {
+  const slug    = document.getElementById('tournamentSelect').value;
+  const content = document.getElementById('content');
+
+  if (!slug) {
+    content.innerHTML = '<p class="placeholder">Select a tournament to view rounds & groups.</p>';
+    return;
+  }
+
+  content.innerHTML = '<p class="placeholder">Loading…</p>';
+
+  try {
+    const { data } = await api(API.structure + '?slug=' + slug);
+    renderRounds(data.rounds);
+  } catch (e) {
+    console.error('Failed to load structure:', e);
+    content.innerHTML = '<p class="placeholder" style="color:#f87171">Failed to load tournament structure.</p>';
+  }
+}
+
+// ── 3. Render rounds → groups → players ──
+function renderRounds(rounds) {
+  const content = document.getElementById('content');
+  content.innerHTML = '';
+
+  rounds.forEach(round => {
+    const block = document.createElement('div');
+    block.className = 'round-block';
+
+    let label = `Round ${round.round_no} — ${round.round_name}`;
+    if (round.is_final) label += ' 🏆 (Final)';
+    block.innerHTML = `<div class="round-title">${label}</div>`;
+
+    round.groups.forEach(group => {
+      block.appendChild(buildGroupCard(group));
+    });
+
+    content.appendChild(block);
+  });
+}
+
+function buildGroupCard(group) {
+  const card = document.createElement('div');
+  card.className = 'group-card';
+
+  const statusClass = group.group_status === 'live' ? 'live'
+                    : group.group_status === 'finished' ? 'finished' : '';
+
+  card.innerHTML = `
+    <div class="group-header">
+      <span class="group-name">${group.group_name}</span>
+      <span class="status-badge ${statusClass}">${group.group_status || 'upcoming'}</span>
+    </div>`;
+
+  group.players.forEach(p => {
+    card.appendChild(buildPlayerRow(p));
+  });
+
+  return card;
+}
+
+function buildPlayerRow(p) {
+  const row = document.createElement('div');
+  row.className = 'player-row';
+  const hasPlayer = p.player_id !== null;
+
+  row.innerHTML = `
+    <span class="player-name ${hasPlayer ? '' : 'empty'}">${p.player_name}</span>
+    <span class="player-status">${p.player_status}</span>
+    <input class="tag-input" type="text" value="${p.tag_id || ''}" placeholder="Tag ID"
+           data-gp-id="${p.gp_id}" ${hasPlayer ? '' : 'disabled'}
+           onblur="updateTag(this)"
+           onkeydown="if(event.key==='Enter'){event.preventDefault();updateTag(this)}" />
+    <span class="save-indicator" id="ind-${p.gp_id}"></span>`;
+
+  return row;
+}
+
+// ── 4. PATCH tag_id on blur / Enter ──
+async function updateTag(input) {
+  const gpId  = input.dataset.gpId;
+  const tagId = input.value.trim();
+  const ind   = document.getElementById('ind-' + gpId);
+
+  // skip if nothing changed and field is empty
+  if (!tagId && !input.dataset.lastSaved) return;
+  // skip if value hasn't changed from last saved
+  if (tagId === (input.dataset.lastSaved || '')) return;
+
+  ind.textContent = '…';
+  ind.className   = 'save-indicator saving';
+
+  try {
+    const res = await api(API.updateTag, 'PATCH', { gp_id: gpId, tag_id: tagId });
+
+    if (res.success) {
+      input.dataset.lastSaved = tagId;  // track last saved value
+      ind.textContent = '✓';
+      ind.className   = 'save-indicator saved';
+      setTimeout(() => { ind.textContent = ''; ind.className = 'save-indicator'; }, 2000);
+    } else {
+      ind.textContent = '✗';
+      ind.className   = 'save-indicator saving';
+      setTimeout(() => { ind.textContent = ''; ind.className = 'save-indicator'; }, 2500);
+    }
+  } catch (e) {
+    console.error('Failed to update tag_id:', e);
+    ind.textContent = '✗';
+    ind.className   = 'save-indicator saving';
+    setTimeout(() => { ind.textContent = ''; ind.className = 'save-indicator'; }, 2500);
+  }
+}
+
+// ── init ──
+loadTournaments();
+</script>
+</body>
+</html>
