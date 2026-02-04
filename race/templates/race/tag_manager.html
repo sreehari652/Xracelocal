@@ -2,28 +2,65 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>Race Display</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+<title>UWB Race Display - Live Tracking</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{background:#0f1117;color:#e2e8f0;font-family:'Segoe UI',sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden}
-  .top{display:flex;align-items:center;gap:14px;padding:10px 18px;background:#1a1d2e;border-bottom:1px solid #2e3148;flex-shrink:0}
-  .top select{padding:8px 12px;border-radius:6px;border:1px solid #3a3f5c;background:#151720;color:#e2e8f0;font-size:.9rem;min-width:200px;outline:none;cursor:pointer}
+  
+  .top{display:flex;align-items:center;gap:8px;padding:10px 12px;background:#1a1d2e;border-bottom:1px solid #2e3148;flex-shrink:0;flex-wrap:wrap}
+  .top select{padding:8px 10px;border-radius:6px;border:1px solid #3a3f5c;background:#151720;color:#e2e8f0;font-size:.85rem;min-width:140px;outline:none;cursor:pointer;flex:1 1 auto}
   .top select:focus{border-color:#6c63ff}
-  .ws{font-size:.78rem;padding:3px 10px;border-radius:12px;background:#2e3148;color:#94a3b8}
-  .ws.on{background:#16a34a33;color:#4ade80}
-  .ws.off{background:#dc262633;color:#f87171}
+  .top button{padding:7px 12px;border-radius:6px;border:none;font-size:.8rem;font-weight:600;cursor:pointer;transition:all .2s;white-space:nowrap}
+  .top button:disabled{opacity:.4;cursor:not-allowed}
+  .btn-live{background:#16a34a;color:#fff}
+  .btn-live:hover:not(:disabled){background:#15803d}
+  .btn-finish{background:#dc2626;color:#fff}
+  .btn-finish:hover:not(:disabled){background:#b91c1c}
+  .status-badge{font-size:.75rem;padding:4px 10px;border-radius:12px;background:#2e3148;color:#94a3b8;font-weight:600;white-space:nowrap}
+  .status-badge.live{background:#16a34a33;color:#4ade80}
+  .status-badge.finished{background:#7c3aed33;color:#a78bfa}
+  .ws-status{font-size:.75rem;padding:4px 10px;border-radius:12px;background:#2e3148;color:#94a3b8}
+  .ws-status.connected{background:#16a34a33;color:#4ade80}
+  .ws-status.disconnected{background:#dc262633;color:#f87171}
+  
   .body{display:flex;flex:1;overflow:hidden}
-  .cv-wrap{flex:1;display:flex;align-items:center;justify-content:center;padding:12px}
-  canvas{border-radius:10px;border:1px solid #2e3148;background:#151720}
-  .side{width:240px;background:#1a1d2e;border-left:1px solid #2e3148;overflow-y:auto;padding:12px;flex-shrink:0}
+  .cv-wrap{flex:1;display:flex;align-items:center;justify-content:center;padding:12px;min-height:0}
+  canvas{border-radius:8px;border:1px solid #2e3148;background:#151720;max-width:100%;height:auto}
+  
+  .side{width:300px;background:#1a1d2e;border-left:1px solid #2e3148;overflow-y:auto;padding:12px;flex-shrink:0}
   .side h3{font-size:.9rem;color:#6c63ff;margin-bottom:10px;border-bottom:1px solid #2e3148;padding-bottom:5px}
-  .card{background:#151720;border-radius:8px;padding:9px 11px;margin-bottom:7px;border-left:4px solid #2e3148;display:flex;align-items:center;gap:9px}
-  .card.live{border-left-color:var(--c)}
+  
+  .stats{background:#151720;border-radius:8px;padding:10px;margin-bottom:12px;border:1px solid #2e3148}
+  .stats-row{display:flex;justify-content:space-between;font-size:.75rem;margin-bottom:4px}
+  .stats-label{color:#64748b}
+  .stats-value{color:#4ade80;font-weight:600}
+  
+  .card{background:#151720;border-radius:8px;padding:10px 12px;margin-bottom:8px;border-left:4px solid #2e3148;position:relative}
+  .card.live{border-left-color:var(--player-color)}
+  .card.tracking{animation:pulse 2s infinite}
   .card .name{font-size:.85rem;font-weight:600;color:#fff}
   .card .info{font-size:.72rem;color:#64748b;margin-top:2px}
-  .card .pos{font-size:.72rem;color:#4ade80;font-weight:600}
+  .card .position{font-size:.72rem;color:#4ade80;font-weight:600;margin-top:2px}
+  .card .tag-badge{display:inline-block;background:#2e3148;color:#94a3b8;padding:2px 6px;border-radius:4px;font-size:.7rem;margin-right:4px}
+  .card .status-dot{width:10px;height:10px;border-radius:50%;position:absolute;right:12px;top:12px}
+  .tag-input{width:100%;padding:6px 8px;border-radius:4px;border:1px solid #3a3f5c;background:#0f1117;color:#e2e8f0;font-size:.8rem;outline:none;margin-top:4px}
+  .tag-input:focus{border-color:#6c63ff}
+  .save-ind{font-size:.7rem;color:#64748b;margin-top:2px;text-align:right}
+  .save-ind.saving{color:#fbbf24}
+  .save-ind.saved{color:#4ade80}
   .ph{color:#4a4f6a;font-size:.85rem;text-align:center;padding:30px 0}
+  
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+  }
+  
+  @media (max-width: 768px) {
+    .body{flex-direction:column}
+    .cv-wrap{padding:6px;max-height:45vh}
+    .side{width:100%;border-left:none;border-top:1px solid #2e3148}
+  }
 </style>
 </head>
 <body>
@@ -31,273 +68,697 @@
 <div class="top">
   <select id="tSel" onchange="loadGroups()"><option value="">— Tournament —</option></select>
   <select id="gSel" onchange="selectGroup()" disabled><option value="">— Group —</option></select>
-  <span class="ws off" id="wsS">● Disconnected</span>
+  <span class="status-badge" id="groupStatus"></span>
+  <button class="btn-live" id="btnLive" onclick="markLive()" disabled>▶ Live</button>
+  <button class="btn-finish" id="btnFinish" onclick="markFinished()" disabled>⏹ Finish</button>
+  <span class="ws-status disconnected" id="wsStatus">● WebSocket</span>
 </div>
 
 <div class="body">
-  <div class="cv-wrap"><canvas id="c" width="780" height="560"></canvas></div>
+  <div class="cv-wrap"><canvas id="c" width="900" height="650"></canvas></div>
   <div class="side">
-    <h3>🏁 Players</h3>
+    <h3>📊 System</h3>
+    <div class="stats">
+      <div class="stats-row">
+        <span class="stats-label">WebSocket:</span>
+        <span class="stats-value" id="wsState">Connecting...</span>
+      </div>
+      <div class="stats-row">
+        <span class="stats-label">Packets/sec:</span>
+        <span class="stats-value" id="pktRate">0</span>
+      </div>
+      <div class="stats-row">
+        <span class="stats-label">Tracking:</span>
+        <span class="stats-value" id="trackCount">0</span>
+      </div>
+    </div>
+    
+    <h3>🏁 Players & Tags</h3>
     <div id="lb"><p class="ph">Select a group</p></div>
   </div>
 </div>
 
 <script>
-// ─── CONFIG ───
+// ═══════════════════════════════════════════════════════════
+// CONFIG
+// ═══════════════════════════════════════════════════════════
 const BASE = 'https://xraceapi.zyberspace.in';
-const API  = { list: BASE+'/api/tournaments/', struct: BASE+'/api/tournament-structure/', players: BASE+'/api/group-players/' };
+const API  = { 
+  list: BASE+'/api/tournaments/', 
+  struct: BASE+'/api/tournament-structure/', 
+  players: BASE+'/api/group-players/',
+  updateTag: BASE+'/api/update-tag-id/',
+  markLive: BASE+'/api/mark-group-live/',      
+  markFinish: BASE+'/api/mark-group-finished/'  
+};
 
-// WebSocket connects to YOUR local Django (not xraceapi)
-const WS_URL = `ws://${window.location.host}/ws/race/`;
+const WS_URL = 'ws://localhost:8001/';
 
-// Anchor positions in cm — match your physical setup
-const ANC = [{x:0,y:0},{x:430,y:0},{x:430,y:470},{x:0,y:470}];
 
-const COLORS = ['#ff4757','#2ed573','#1e90ff','#ffa502','#a55eea','#ff6b81','#26de81','#45aaf2'];
+// Anchor positions (cm) - MATCH YOUR PHYSICAL SETUP!
+const ANC = [
+  {x:0,   y:0},    // A0
+  {x:430, y:0},    // A1
+  {x:430, y:470},  // A2
+  {x:0,   y:470}   // A3
+];
 
-// ─── STATE ───
-let players = [];          // [{name, tag_id, color}]
-let tagData  = {};         // { tag_id: {x, y, trail:[], lastTime} }
-let watchTags = new Set(); // tag_ids for current group
+const COLORS = ['#ff4757','#2ed573','#1e90ff','#ffa502','#a55eea','#ff6b81','#26de81','#45aaf2','#fc5c65','#fd79a8'];
 
-// ─── CANVAS ───
+// ═══════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════
+let currentGroupId = null;
+let currentGroupStatus = null;
+let players = [];              // From API: [{player_name, tag_id, gp_id, ...}]
+let tagData = {};              // Live tracking: {tag_id: {x, y, trail, lastTime}}
+let activeTagIds = new Set();  // Tag IDs currently assigned to players in live group
+
+// Stats
+let packetCount = 0;
+let packetsPerSec = 0;
+let lastSecond = Date.now();
+let packetsThisSecond = 0;
+
+// ═══════════════════════════════════════════════════════════
+// CANVAS SETUP
+// ═══════════════════════════════════════════════════════════
 const canvas = document.getElementById('c');
-const ctx    = canvas.getContext('2d');
+const ctx = canvas.getContext('2d');
 let scale, offX, offY;
 
 function calcLayout() {
-  const pad = 55;
-  const maxX = Math.max(...ANC.map(a=>a.x));
-  const maxY = Math.max(...ANC.map(a=>a.y));
-  scale = Math.min((canvas.width-pad*2)/maxX, (canvas.height-pad*2)/maxY) * 0.85;
-  offX  = (canvas.width  - maxX*scale) / 2;
-  offY  = (canvas.height - maxY*scale) / 2;
+  const pad = 60;
+  const maxX = Math.max(...ANC.map(a => a.x));
+  const maxY = Math.max(...ANC.map(a => a.y));
+  scale = Math.min((canvas.width - pad*2) / maxX, (canvas.height - pad*2) / maxY) * 0.85;
+  offX = (canvas.width - maxX * scale) / 2;
+  offY = (canvas.height - maxY * scale) / 2;
 }
 calcLayout();
 
-// cm → pixel (Y flipped)
-function toP(cx,cy){ return { px: offX+cx*scale, py: canvas.height-offY-cy*scale }; }
-
-// ─── TRILATERATION ───
-function trilaterate(ranges) {
-  const v = [];
-  ranges.forEach((r,i) => { if(r>0 && i<ANC.length) v.push({ax:ANC[i].x, ay:ANC[i].y, r}); });
-  if(v.length<3) return null;
-
-  const [a,b,c] = v;
-  const A=2*(b.ax-a.ax), B=2*(b.ay-a.ay);
-  const C=a.r**2-b.r**2-a.ax**2+b.ax**2-a.ay**2+b.ay**2;
-  const D=2*(c.ax-b.ax), E=2*(c.ay-b.ay);
-  const F=b.r**2-c.r**2-b.ax**2+c.ax**2-b.ay**2+c.ay**2;
-  const den=A*E-B*D;
-  if(Math.abs(den)<0.001) return null;
-  return { x:(C*E-F*B)/den, y:(A*F-C*D)/den };
+function toPixel(cx, cy) {
+  return {
+    px: offX + cx * scale,
+    py: canvas.height - offY - cy * scale  // Y-flip
+  };
 }
 
-// ─── DRAW LOOP ───
-function draw() {
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-
-  // Grid
-  ctx.strokeStyle='#1e2130'; ctx.lineWidth=1;
-  const mxX=Math.max(...ANC.map(a=>a.x)), mxY=Math.max(...ANC.map(a=>a.y));
-  for(let x=0;x<=mxX;x+=50){ const a=toP(x,0),b=toP(x,mxY); ctx.beginPath();ctx.moveTo(a.px,a.py);ctx.lineTo(b.px,b.py);ctx.stroke(); }
-  for(let y=0;y<=mxY;y+=50){ const a=toP(0,y),b=toP(mxX,y); ctx.beginPath();ctx.moveTo(a.px,a.py);ctx.lineTo(b.px,b.py);ctx.stroke(); }
-
-  // Boundary
-  ctx.strokeStyle='#6c63ff'; ctx.lineWidth=2.5; ctx.beginPath();
-  ANC.forEach((a,i)=>{ const p=toP(a.x,a.y); i===0?ctx.moveTo(p.px,p.py):ctx.lineTo(p.px,p.py); });
-  ctx.closePath(); ctx.stroke();
-
-  // Anchor labels
-  ANC.forEach((a,i)=>{
-    const p=toP(a.x,a.y);
-    ctx.fillStyle='#6c63ff'; ctx.beginPath();ctx.arc(p.px,p.py,6,0,Math.PI*2);ctx.fill();
-    ctx.fillStyle='#94a3b8'; ctx.font='11px Segoe UI'; ctx.fillText('A'+i,p.px+9,p.py-7);
-  });
-
-  // Players: trail + dot + label — ONLY if data exists for their tag
-  const now = Date.now();
-  players.forEach(pl => {
-    if(!pl.tag_id || !tagData[pl.tag_id]) return;   // no data yet → skip, don't draw
-
-    const d = tagData[pl.tag_id];
-
-    // If no update in last 3 seconds, don't draw (stale)
-    if(now - d.lastTime > 3000) return;
-
-    // Trail
-    if(d.trail.length>1){
-      ctx.strokeStyle=pl.color; ctx.lineWidth=2.5; ctx.globalAlpha=0.35;
-      ctx.beginPath();
-      d.trail.forEach((pt,i)=>{ const p=toP(pt.x,pt.y); i===0?ctx.moveTo(p.px,p.py):ctx.lineTo(p.px,p.py); });
-      ctx.stroke(); ctx.globalAlpha=1;
+// ═══════════════════════════════════════════════════════════
+// TRILATERATION
+// ═══════════════════════════════════════════════════════════
+function trilaterate(ranges) {
+  const valid = [];
+  ranges.forEach((r, i) => {
+    if (r > 0 && i < ANC.length) {
+      valid.push({x: ANC[i].x, y: ANC[i].y, r});
     }
-
-    // Car dot + glow
-    const p=toP(d.x, d.y);
-    ctx.shadowColor=pl.color; ctx.shadowBlur=14;
-    ctx.fillStyle=pl.color; ctx.beginPath();ctx.arc(p.px,p.py,11,0,Math.PI*2);ctx.fill();
-    ctx.shadowBlur=0;
-
-    // White ring
-    ctx.strokeStyle='#fff'; ctx.lineWidth=2.5;
-    ctx.beginPath();ctx.arc(p.px,p.py,11,0,Math.PI*2);ctx.stroke();
-
-    // Name label above
-    ctx.fillStyle='#fff'; ctx.font='bold 13px Segoe UI'; ctx.textAlign='center';
-    ctx.fillText(pl.name, p.px, p.py-18);
-    ctx.textAlign='left';
   });
+  
+  if (valid.length < 3) return null;
+  
+  const [a, b, c] = valid;
+  const A = 2 * (b.x - a.x);
+  const B = 2 * (b.y - a.y);
+  const C = a.r**2 - b.r**2 - a.x**2 + b.x**2 - a.y**2 + b.y**2;
+  const D = 2 * (c.x - b.x);
+  const E = 2 * (c.y - b.y);
+  const F = b.r**2 - c.r**2 - b.x**2 + c.x**2 - b.y**2 + c.y**2;
+  
+  const den = A * E - B * D;
+  if (Math.abs(den) < 0.001) return null;
+  
+  return {
+    x: (C * E - F * B) / den,
+    y: (A * F - C * D) / den
+  };
+}
 
+// ═══════════════════════════════════════════════════════════
+// DRAW LOOP
+// ═══════════════════════════════════════════════════════════
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  
+  // Grid
+  ctx.strokeStyle = '#1e2130';
+  ctx.lineWidth = 1;
+  const maxX = Math.max(...ANC.map(a => a.x));
+  const maxY = Math.max(...ANC.map(a => a.y));
+  
+  for (let x = 0; x <= maxX; x += 50) {
+    const a = toPixel(x, 0);
+    const b = toPixel(x, maxY);
+    ctx.beginPath();
+    ctx.moveTo(a.px, a.py);
+    ctx.lineTo(b.px, b.py);
+    ctx.stroke();
+  }
+  
+  for (let y = 0; y <= maxY; y += 50) {
+    const a = toPixel(0, y);
+    const b = toPixel(maxX, y);
+    ctx.beginPath();
+    ctx.moveTo(a.px, a.py);
+    ctx.lineTo(b.px, b.py);
+    ctx.stroke();
+  }
+  
+  // Boundary
+  ctx.strokeStyle = '#6c63ff';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ANC.forEach((anc, i) => {
+    const p = toPixel(anc.x, anc.y);
+    if (i === 0) ctx.moveTo(p.px, p.py);
+    else ctx.lineTo(p.px, p.py);
+  });
+  ctx.closePath();
+  ctx.stroke();
+  
+  // Anchors
+  ANC.forEach((anc, i) => {
+    const p = toPixel(anc.x, anc.y);
+    
+    // Dot
+    ctx.fillStyle = '#6c63ff';
+    ctx.beginPath();
+    ctx.arc(p.px, p.py, 7, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Ring
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(p.px, p.py, 7, 0, Math.PI * 2);
+    ctx.stroke();
+    
+    // Label
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = 'bold 12px Segoe UI';
+    ctx.fillText('A' + i, p.px + 12, p.py - 8);
+  });
+  
+  // Players/Tags - ONLY if group is LIVE and tag has data
+  if (currentGroupStatus === 'live') {
+    const now = Date.now();
+    
+    players.forEach((player, idx) => {
+      const tid = player.tag_id;
+      
+      // Skip if no tag assigned or no tracking data
+      if (!tid || !tagData[tid]) return;
+      
+      const data = tagData[tid];
+      
+      // Skip if stale (>3 seconds old)
+      if (now - data.lastTime > 3000) return;
+      
+      const color = COLORS[idx % COLORS.length];
+      const p = toPixel(data.x, data.y);
+      
+      // Trail
+      if (data.trail && data.trail.length > 1) {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3;
+        ctx.globalAlpha = 0.4;
+        ctx.beginPath();
+        data.trail.forEach((pt, i) => {
+          const tp = toPixel(pt.x, pt.y);
+          if (i === 0) ctx.moveTo(tp.px, tp.py);
+          else ctx.lineTo(tp.px, tp.py);
+        });
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      
+      // Glow
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 16;
+      
+      // Dot
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(p.px, p.py, 13, 0, Math.PI * 2);
+      ctx.fill();
+      
+      ctx.shadowBlur = 0;
+      
+      // White ring
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(p.px, p.py, 13, 0, Math.PI * 2);
+      ctx.stroke();
+      
+      // Name label
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 14px Segoe UI';
+      ctx.textAlign = 'center';
+      ctx.fillText(player.player_name, p.px, p.py - 22);
+      ctx.textAlign = 'left';
+      
+      // Pulse
+      const pulse = 13 + 4 * Math.sin(Date.now() / 100);
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = 0.3;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(p.px, p.py, pulse, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    });
+  }
+  
   requestAnimationFrame(draw);
 }
 draw();
 
-// ─── WEBSOCKET ───
+// ═══════════════════════════════════════════════════════════
+// WEBSOCKET
+// ═══════════════════════════════════════════════════════════
 let ws;
-function connectWS(){
-  if(ws) ws.close();
+let reconnectTimer;
+
+function connectWS() {
+  if (ws) ws.close();
+  
+  console.log('[WS] Connecting to', WS_URL);
   ws = new WebSocket(WS_URL);
-
-  ws.onopen = ()=>{
-    document.getElementById('wsS').className='ws on';
-    document.getElementById('wsS').textContent='● Connected';
+  
+  ws.onopen = () => {
+    console.log('[WS] Connected!');
+    document.getElementById('wsStatus').className = 'ws-status connected';
+    document.getElementById('wsStatus').textContent = '● Connected';
+    document.getElementById('wsState').textContent = 'Connected';
+    
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
   };
-  ws.onclose = ()=>{
-    document.getElementById('wsS').className='ws off';
-    document.getElementById('wsS').textContent='● Disconnected';
-    setTimeout(connectWS, 2000); // auto-reconnect
+  
+  ws.onclose = () => {
+    console.log('[WS] Disconnected');
+    document.getElementById('wsStatus').className = 'ws-status disconnected';
+    document.getElementById('wsStatus').textContent = '● Disconnected';
+    document.getElementById('wsState').textContent = 'Disconnected';
+    
+    if (!reconnectTimer) {
+      reconnectTimer = setTimeout(connectWS, 2000);
+    }
   };
-  ws.onerror = ()=>{};
-
-  ws.onmessage = (e)=>{
-    const msg = JSON.parse(e.data);
-    if(msg.type !== 'tag_position') return;
-
-    const tid = msg.tag_id;
-
-    // ONLY process if this tag belongs to selected group
-    if(!watchTags.has(tid)) return;
-
-    const pos = trilaterate(msg.range);
-    if(!pos) return;
-
-    // Init
-    if(!tagData[tid]) tagData[tid] = {x:0, y:0, trail:[], lastTime:0};
-
-    tagData[tid].x = pos.x;
-    tagData[tid].y = pos.y;
-    tagData[tid].lastTime = Date.now();
-
-    // Trail (keep 60 points)
-    tagData[tid].trail.push({x:pos.x, y:pos.y});
-    if(tagData[tid].trail.length > 60) tagData[tid].trail.shift();
-
-    // Update sidebar live
-    updateSidebar();
+  
+  ws.onerror = (err) => {
+    console.error('[WS] Error:', err);
+  };
+  
+  ws.onmessage = (e) => {
+    try {
+      const msg = JSON.parse(e.data);
+      
+      if (msg.type === 'connection') {
+        console.log('[WS]', msg.message);
+        return;
+      }
+      
+      if (msg.type !== 'tag_position') return;
+      
+      const tid = msg.tag_id;
+      
+      // ★★★ KEY FILTER: Only process if this tag is in the active (live) group ★★★
+      if (!activeTagIds.has(tid)) {
+        // Ignore this tag - not in current live group
+        return;
+      }
+      
+      // Calculate position
+      const pos = trilaterate(msg.range);
+      if (!pos) return;
+      
+      // Initialize if needed
+      if (!tagData[tid]) {
+        tagData[tid] = {x: 0, y: 0, trail: [], lastTime: 0};
+      }
+      
+      // Update
+      tagData[tid].x = pos.x;
+      tagData[tid].y = pos.y;
+      tagData[tid].lastTime = Date.now();
+      
+      // Trail (keep last 40 points)
+      tagData[tid].trail.push({x: pos.x, y: pos.y});
+      if (tagData[tid].trail.length > 40) {
+        tagData[tid].trail.shift();
+      }
+      
+      // Stats
+      packetCount++;
+      packetsThisSecond++;
+      
+      // Update sidebar
+      updateSidebar();
+      
+    } catch (err) {
+      console.error('[WS] Parse error:', err);
+    }
   };
 }
+
 connectWS();
 
-// ─── API helper ───
-async function get(url){ return (await fetch(url,{credentials:'include'})).json(); }
+// Update stats every second
+setInterval(() => {
+  document.getElementById('pktRate').textContent = packetsThisSecond;
+  packetsPerSec = packetsThisSecond;
+  packetsThisSecond = 0;
+  
+  // Count active
+  const now = Date.now();
+  const active = Object.keys(tagData).filter(tid => 
+    activeTagIds.has(parseInt(tid)) && (now - tagData[tid].lastTime) < 3000
+  ).length;
+  document.getElementById('trackCount').textContent = active;
+}, 1000);
 
-// ─── LOAD TOURNAMENTS ───
-async function loadTournaments(){
+// ═══════════════════════════════════════════════════════════
+// API FUNCTIONS
+// ═══════════════════════════════════════════════════════════
+async function get(url) {
+  try {
+    const res = await fetch(url, {credentials: 'include'});
+    return await res.json();
+  } catch (err) {
+    console.error('API Error:', err);
+    return {data: []};
+  }
+}
+
+function getCSRF() {
+  const cookie = document.cookie.match(/csrftoken=([^;]+)/);
+  return cookie ? cookie[1] : null;
+}
+
+async function patchWithCSRF(url, body) {
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-CSRFToken': getCSRF()
+    },
+    credentials: 'include',
+    body: JSON.stringify(body)
+  });
+  return res.json();
+}
+
+// ═══════════════════════════════════════════════════════════
+// TOURNAMENT MANAGEMENT
+// ═══════════════════════════════════════════════════════════
+async function loadTournaments() {
   const {data} = await get(API.list);
   const sel = document.getElementById('tSel');
-  data.forEach(t=>{
+  data.forEach(t => {
     const o = document.createElement('option');
-    o.value = t.slug; o.textContent = t.name;
+    o.value = t.slug;
+    o.textContent = t.name;
     sel.appendChild(o);
   });
 }
 
-// ─── LOAD GROUPS ───
-async function loadGroups(){
+async function loadGroups() {
   const slug = document.getElementById('tSel').value;
   const gSel = document.getElementById('gSel');
-  gSel.innerHTML='<option value="">— Group —</option>';
+  
+  gSel.innerHTML = '<option value="">— Group —</option>';
   gSel.disabled = true;
-  if(!slug) return;
-
-  const {data} = await get(API.struct+'?slug='+slug);
-  if(!data?.rounds) return;
+  
+  currentGroupId = null;
+  currentGroupStatus = null;
+  players = [];
+  activeTagIds.clear();
+  
+  updateStatusBadge();
+  updateButtons();
+  renderPlayers();
+  
+  if (!slug) return;
+  
+  const {data} = await get(API.struct + '?slug=' + slug);
+  if (!data?.rounds) return;
+  
   gSel.disabled = false;
-
-  data.rounds.forEach(r=>{
+  
+  data.rounds.forEach(r => {
     const og = document.createElement('optgroup');
-    og.label = `Round ${r.round_no} — ${r.round_name}${r.is_final?' 🏆':''}`;
-    r.groups.forEach(g=>{
+    og.label = `Round ${r.round_no} — ${r.round_name}${r.is_final ? ' 🏆' : ''}`;
+    
+    r.groups.forEach(g => {
       const o = document.createElement('option');
       o.value = g.group_id;
-      o.textContent = g.group_name + (g.group_status?` [${g.group_status}]`:'');
+      o.dataset.status = g.group_status || '';
+      o.textContent = g.group_name + (g.group_status ? ` [${g.group_status}]` : '');
       og.appendChild(o);
     });
+    
     gSel.appendChild(og);
   });
 }
 
-// ─── SELECT GROUP → load players → set watchTags ───
-async function selectGroup(){
-  const gid = document.getElementById('gSel').value;
-
-  // Reset everything
-  players   = [];
-  tagData   = {};
-  watchTags = new Set();
-
-  if(!gid){ renderSidebar(); return; }
-
-  const {data} = await get(API.players+'?group_id='+gid);
-
-  data.forEach((p,i)=>{
-    players.push({ name: p.player_name, tag_id: p.tag_id, color: COLORS[i%COLORS.length] });
-    if(p.tag_id) watchTags.add(p.tag_id);  // from now on, WS will process these tags
+async function selectGroup() {
+  const gSel = document.getElementById('gSel');
+  currentGroupId = gSel.value;
+  
+  if (!currentGroupId) {
+    players = [];
+    currentGroupStatus = null;
+    activeTagIds.clear();
+    renderPlayers();
+    updateStatusBadge();
+    updateButtons();
+    return;
+  }
+  
+  const selectedOption = gSel.options[gSel.selectedIndex];
+  currentGroupStatus = selectedOption.dataset.status || '';
+  
+  updateStatusBadge();
+  updateButtons();
+  
+  // Load players
+  const {data} = await get(API.players + '?group_id=' + currentGroupId);
+  players = data;
+  
+  // Build activeTagIds set
+  activeTagIds.clear();
+  players.forEach(p => {
+    if (p.tag_id) {
+      activeTagIds.add(parseInt(p.tag_id));
+    }
   });
-
-  renderSidebar();
+  
+  console.log('[GROUP] Selected:', currentGroupId);
+  console.log('[GROUP] Status:', currentGroupStatus);
+  console.log('[GROUP] Active Tags:', Array.from(activeTagIds));
+  
+  renderPlayers();
 }
 
-// ─── SIDEBAR: show all players, mark live if data is flowing ───
-function renderSidebar(){
-  const lb = document.getElementById('lb');
-  if(!players.length){ lb.innerHTML='<p class="ph">No players</p>'; return; }
+function updateStatusBadge() {
+  const badge = document.getElementById('groupStatus');
+  
+  if (!currentGroupStatus) {
+    badge.textContent = '';
+    badge.className = 'status-badge';
+    return;
+  }
+  
+  badge.textContent = currentGroupStatus.toUpperCase();
+  badge.className = 'status-badge ' + currentGroupStatus;
+}
 
-  lb.innerHTML = players.map(p=>{
-    const hasData = p.tag_id && tagData[p.tag_id];
-    const isLive  = hasData && (Date.now()-tagData[p.tag_id].lastTime < 3000);
+function updateButtons() {
+  const btnLive = document.getElementById('btnLive');
+  const btnFinish = document.getElementById('btnFinish');
+  
+  if (!currentGroupId) {
+    btnLive.disabled = true;
+    btnFinish.disabled = true;
+    return;
+  }
+  
+  btnLive.disabled = (currentGroupStatus === 'live' || currentGroupStatus === 'finished');
+  btnFinish.disabled = (currentGroupStatus !== 'live');
+}
+
+async function markLive() {
+  if (!currentGroupId) return;
+  
+  const res = await patchWithCSRF(API.markLive, {group_id: currentGroupId});
+  
+  if (res.success) {
+    currentGroupStatus = 'live';
+    updateStatusBadge();
+    updateButtons();
+    
+    const gSel = document.getElementById('gSel');
+    const opt = gSel.options[gSel.selectedIndex];
+    opt.dataset.status = 'live';
+    const baseName = opt.textContent.replace(/\s*\[.*?\]\s*$/, '');
+    opt.textContent = baseName + ' [live]';
+    
+    console.log('[RACE] Group marked LIVE - tracking active for tags:', Array.from(activeTagIds));
+  }
+}
+
+async function markFinished() {
+  if (!currentGroupId) return;
+  
+  const res = await patchWithCSRF(API.markFinish, {group_id: currentGroupId});
+  
+  if (res.success) {
+    currentGroupStatus = 'finished';
+    updateStatusBadge();
+    updateButtons();
+    
+    const gSel = document.getElementById('gSel');
+    const opt = gSel.options[gSel.selectedIndex];
+    opt.dataset.status = 'finished';
+    const baseName = opt.textContent.replace(/\s*\[.*?\]\s*$/, '');
+    opt.textContent = baseName + ' [finished]';
+    
+    console.log('[RACE] Group marked FINISHED');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// SIDEBAR
+// ═══════════════════════════════════════════════════════════
+function renderPlayers() {
+  const lb = document.getElementById('lb');
+  
+  if (!players.length) {
+    lb.innerHTML = '<p class="ph">No players in this group</p>';
+    return;
+  }
+  
+  const now = Date.now();
+  
+  lb.innerHTML = players.map((p, idx) => {
+    const color = COLORS[idx % COLORS.length];
+    const tid = p.tag_id;
+    const hasData = tid && tagData[tid];
+    const isLive = hasData && (now - tagData[tid].lastTime) < 3000;
+    const isTracking = currentGroupStatus === 'live' && isLive;
+    
     return `
-      <div class="card ${isLive?'live':''}" style="--c:${p.color}; ${isLive?'border-left-color:'+p.color:''}">
-        <div style="width:12px;height:12px;border-radius:50%;background:${isLive?p.color:'#2e3148'}"></div>
-        <div>
-          <div class="name">${p.name}</div>
+      <div class="card ${isTracking ? 'live tracking' : ''}" style="--player-color:${color}">
+        <div class="status-dot" style="background:${isTracking ? color : '#2e3148'}"></div>
+        <div style="flex:1">
+          <div class="name">${p.player_name}</div>
           <div class="info">
-            ${p.tag_id ? 'Tag: '+p.tag_id+'  ' : '<span style="color:#4a4f6a;font-style:italic">No tag</span>'}
-            ${isLive ? `<span class="pos" id="pos-${p.tag_id}">x:${tagData[p.tag_id].x.toFixed(0)} y:${tagData[p.tag_id].y.toFixed(0)}</span>` : (p.tag_id?'<span style="color:#4a4f6a">Waiting…</span>':'')}
+            ${p.player_status}
+            ${tid ? `<span class="tag-badge">Tag ${tid}</span>` : ''}
           </div>
+          
+          ${currentGroupStatus !== 'live' && currentGroupStatus !== 'finished' ? `
+            <input class="tag-input" 
+                   type="text" 
+                   value="${tid || ''}" 
+                   placeholder="Enter Tag ID"
+                   data-gp-id="${p.gp_id}"
+                   onblur="saveTag(this)"
+                   onkeydown="if(event.key==='Enter'){event.preventDefault();saveTag(this)}">
+            <div class="save-ind" id="ind-${p.gp_id}"></div>
+          ` : ''}
+          
+          ${isTracking ? `
+            <div class="position" id="pos-${tid}">
+              x:${tagData[tid].x.toFixed(0)} y:${tagData[tid].y.toFixed(0)}
+            </div>
+          ` : ''}
+          
+          ${currentGroupStatus === 'live' && tid && !isLive ? `
+            <div class="info" style="color:#fbbf24">Waiting for signal...</div>
+          ` : ''}
         </div>
-      </div>`;
+      </div>
+    `;
   }).join('');
 }
 
-// lightweight update — just swap the position text, no full re-render
-function updateSidebar(){
-  players.forEach(p=>{
-    if(!p.tag_id || !tagData[p.tag_id]) return;
-    const el = document.getElementById('pos-'+p.tag_id);
-    if(el){
-      el.textContent = `x:${tagData[p.tag_id].x.toFixed(0)} y:${tagData[p.tag_id].y.toFixed(0)}`;
-    } else {
-      // first time this tag got data — need full render to show it
-      renderSidebar();
+function updateSidebar() {
+  // Only update positions, don't re-render entire sidebar
+  const now = Date.now();
+  
+  players.forEach(p => {
+    const tid = p.tag_id;
+    if (!tid || !tagData[tid]) return;
+    
+    const el = document.getElementById('pos-' + tid);
+    if (el && (now - tagData[tid].lastTime) < 3000) {
+      el.textContent = `x:${tagData[tid].x.toFixed(0)} y:${tagData[tid].y.toFixed(0)}`;
+    } else if (!el) {
+      // First data received - need full re-render to show position
+      renderPlayers();
     }
   });
 }
 
-// ─── INIT ───
+async function saveTag(input) {
+  const gpId = input.dataset.gpId;
+  const tagId = input.value.trim();
+  const ind = document.getElementById('ind-' + gpId);
+  
+  ind.textContent = '…';
+  ind.className = 'save-ind saving';
+  
+  const res = await patchWithCSRF(API.updateTag, {gp_id: gpId, tag_id: tagId});
+  
+  if (res.success) {
+    ind.textContent = '✓ Saved';
+    ind.className = 'save-ind saved';
+    setTimeout(() => {
+      ind.textContent = '';
+      ind.className = 'save-ind';
+    }, 2000);
+    
+    // Update local state
+    const player = players.find(p => p.gp_id == gpId);
+    if (player) {
+      player.tag_id = tagId ? parseInt(tagId) : null;
+      
+      // Rebuild activeTagIds
+      activeTagIds.clear();
+      players.forEach(p => {
+        if (p.tag_id) activeTagIds.add(parseInt(p.tag_id));
+      });
+      
+      console.log('[TAG] Updated - Active tags:', Array.from(activeTagIds));
+    }
+  } else {
+    ind.textContent = '✗ Error';
+    ind.className = 'save-ind saving';
+    setTimeout(() => {
+      ind.textContent = '';
+      ind.className = 'save-ind';
+    }, 2500);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════════
 loadTournaments();
+
+console.log('═══════════════════════════════════════════');
+console.log('UWB Race Display - Live Tracking');
+console.log('═══════════════════════════════════════════');
+console.log('1. Select tournament and group');
+console.log('2. Assign tag IDs to players');
+console.log('3. Click "▶ Live" to start tracking');
+console.log('4. Watch real-time positions on canvas!');
+console.log('═══════════════════════════════════════════');
 </script>
 </body>
 </html>
