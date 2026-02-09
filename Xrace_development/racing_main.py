@@ -115,8 +115,14 @@ class RacingTracker:
             dist = math.sqrt((anchor.x - center_x) ** 2 + (anchor.y - center_y) ** 2)
             max_radius = max(max_radius, dist)
 
-        cm2p = min(SCREEN_X - 400, SCREEN_Y - 100) / 2 * 0.85 / max_radius
-        x_offset = 350 + (SCREEN_X - 400) / 2 - center_x * cm2p
+        cm2p = min(SCREEN_X - 400, SCREEN_Y - 50) / 2 * 0.85 / max_radius
+        #x_offset = 350 + (SCREEN_X - 400) / 2 - center_x * cm2p
+        LEFT_MARGIN = 60
+        RIGHT_PANEL_WIDTH = 420  # space for leaderboard
+
+        usable_width = SCREEN_X - RIGHT_PANEL_WIDTH - LEFT_MARGIN
+        x_offset = LEFT_MARGIN + (usable_width / 2) - center_x * cm2p
+
         y_offset = (SCREEN_Y / 2) - center_y * cm2p
         center_x_pixel = int(center_x * cm2p + x_offset)
         center_y_pixel = int(center_y * cm2p + y_offset)

@@ -16,11 +16,15 @@ BLACK = [0, 0, 0]
 WHITE = [255, 255, 255]
 GREEN = [0, 255, 0]
 BLUE = [0, 100, 255]
-GRAY = [200, 200, 200]
-LIGHT_GRAY = [240, 240, 240]
+GRAY = [100, 100, 100]  # Darker gray for visibility on white
+LIGHT_GRAY = [220, 220, 220]
+DARK_GRAY = [50, 50, 50]  # For text on white background
 YELLOW = [255, 200, 0]
 ORANGE = [255, 165, 0]
 RANGE_CIRCLE_COLOR = [200, 200, 255]
+
+# Background color
+BACKGROUND_COLOR = WHITE  # Changed from BLACK to WHITE
 
 # ============== UWB System Configuration ==============
 ANCHOR_COUNT = 4
@@ -28,11 +32,12 @@ TAG_COUNT = 3  # Optimized for 3 tags
 UDP_PORT = 4210
 
 # Anchor positions (in cm) - MEASURE YOUR ACTUAL POSITIONS!
+# Moved to center of screen with larger spacing
 ANCHOR_POSITIONS = {
-    0: (0, 0),
-    1: (430, 0),
-    2: (430, 470),
-    3: (0, 470)
+    0: (50, 50),      # Bottom-left corner
+    1: (550, 50),     # Bottom-right corner (increased spacing)
+    2: (550, 550),    # Top-right corner (increased spacing)
+    3: (50, 550)      # Top-left corner
 }
 
 # ============== Tracking Parameters ==============

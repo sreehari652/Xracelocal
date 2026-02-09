@@ -8,21 +8,32 @@ TOTAL_LAPS = 10  # Total laps in the race
 MAX_CARS = 3  # Maximum number of cars (tags)
 
 # ============== Start/Finish Line Configuration ==============
-# Start/Finish line position (vertical line)
-START_LINE_X = 215  # X position in cm (middle of track)
-START_LINE_Y1 = 0   # Start Y position
-START_LINE_Y2 = 470  # End Y position
+# START LINE (where race begins)
+START_LINE_X = 200  # X position in cm (adjusted for new track)
+START_LINE_Y1 = 50   # Start Y position
+START_LINE_Y2 = 550  # End Y position
+START_LINE_COLOR = [0, 200, 0]  # Green for start
+START_LINE_WIDTH = 5
+
+# FINISH LINE (where laps complete)
+FINISH_LINE_X = 300  # Same position as start (traditional racing)
+FINISH_LINE_Y1 = 50
+FINISH_LINE_Y2 = 550
+FINISH_LINE_COLOR = [255, 0, 0]  # Red for finish
+FINISH_LINE_WIDTH = 5
+
+# Use same line for both start and finish? (traditional racing)
+USE_SAME_LINE_FOR_START_FINISH = True
+
+# Or use separate lines (if False, will use both lines separately)
+# START_LINE_X = 200  # Example: separate start line
+# FINISH_LINE_X = 400  # Example: separate finish line
 
 # Start line orientation: 'vertical' or 'horizontal'
 START_LINE_ORIENTATION = 'vertical'
 
-# Alternative for horizontal line:
-# START_LINE_Y = 235  # Y position in cm
-# START_LINE_X1 = 0
-# START_LINE_X2 = 430
-
 # Crossing detection threshold (how close to line to register crossing)
-LINE_CROSSING_THRESHOLD = 20  # cm
+LINE_CROSSING_THRESHOLD = 30  # cm (increased for better detection)
 
 # Minimum time between lap completions (prevents false triggers)
 MIN_LAP_TIME = 3.0  # seconds
@@ -59,10 +70,6 @@ COLLISION_INITIATOR_METHOD = 'speed'
 COLLISION_SPEED_DIFF_THRESHOLD = 20
 
 # ============== Visualization Settings ==============
-# Start/Finish line color
-START_LINE_COLOR = [0, 255, 0]  # Green
-START_LINE_WIDTH = 4
-
 # Lap counter position offset from car
 LAP_DISPLAY_OFFSET_X = 18
 LAP_DISPLAY_OFFSET_Y = 25
