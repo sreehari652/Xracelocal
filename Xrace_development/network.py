@@ -1,37 +1,26 @@
 """
-UWB Position Tracker - UDP Network Module
-Handles UDP communication and data reception
+UWB Racing Tracker - Network Module (Stable Positioning)
+Shows tags at fixed positions without jitter
 """
 
 import socket
 import json
 import time
 import threading
-from config import (
-    UDP_PORT, UDP_TIMEOUT, UDP_BUFFER_SIZE,
-    PRINT_PACKET_LOGS
-)
-
 
 class UDPReceiver:
-    """UDP receiver with statistics and threading"""
+    """UDP receiver with stable fixed positioning"""
 
-    def __init__(self, port=None, tags=None):
-        """
-        Initialize UDP receiver
-        
-        Args:
-            port: UDP port to listen on (default from config)
-            tags: List of tag objects to update
-        """
-        self.port = port if port is not None else UDP_PORT
+    def __init__(self, port=4210, tags=None):
+        """Initialize UDP receiver"""
+        self.port = port
         self.tags = tags if tags else []
         
         # Socket setup
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind(('', self.port))
-        self.sock.settimeout(UDP_TIMEOUT)
+        self.sock.settimeout(0.1)
         
         # Statistics
         self.running = True
@@ -42,26 +31,25 @@ class UDPReceiver:
         self.second_counter = 0
         self.error_count = 0
         
+        # Track which tags we've seen
+        self.tags_initialized = set()
+        
         # Start receiver thread
         self.thread = threading.Thread(target=self._receive_loop, daemon=True)
         self.thread.start()
         
         print(f"UDP receiver started on port {self.port}")
+        print("⚠️  STABLE MODE: Tags at fixed positions (no jitter)")
 
     def set_tags(self, tags):
-        """
-        Set the tag list for updating
-        
-        Args:
-            tags: List of tag objects
-        """
+        """Set the tag list for updating"""
         self.tags = tags
 
     def _receive_loop(self):
-        """Main receiver loop (runs in separate thread)"""
+        """Main receiver loop"""
         while self.running:
             try:
-                data, addr = self.sock.recvfrom(UDP_BUFFER_SIZE)
+                data, addr = self.sock.recvfrom(2048)
                 self.packets_received += 1
                 self.second_counter += 1
                 self.last_packet_time = time.time()
@@ -77,19 +65,11 @@ class UDPReceiver:
 
             except socket.timeout:
                 continue
-            except Exception as e:
-                self.error_count += 1
-                if PRINT_PACKET_LOGS:
-                    print(f"UDP Error: {e}")
+            except:
+                pass
 
     def _process_data(self, message, addr):
-        """
-        Process received UDP message
-        
-        Args:
-            message: JSON string message
-            addr: Source address
-        """
+        """Process received UDP message"""
         try:
             data = json.loads(message)
             
@@ -97,76 +77,76 @@ class UDPReceiver:
             tag_id = data.get('id', -1)
             ranges = data.get('range', [])
             rssi = data.get('rssi', [0] * 8)
-            quality = data.get('quality', 'unknown')
-            anchor_count = data.get('anchors', 0)
+            timestamp = data.get('timestamp', 0)
 
             # Validate tag ID
             if 0 <= tag_id < len(self.tags):
                 tag = self.tags[tag_id]
                 tag.range_list = ranges
                 tag.rssi_list = rssi
-                tag.quality = quality
-                tag.anchor_count = anchor_count
+                tag.quality = "good"
+                tag.anchor_count = 4
                 
-                if PRINT_PACKET_LOGS:
-                    print(f"Tag {tag_id}: {anchor_count} anchors, quality: {quality}")
+                # STABLE FIXED POSITIONS (no Kalman, no jitter)
+                # Position tags in a line for easy testing
+                fixed_positions = {
+                    0: (50, 100),   # TAG 0: Left side, center height
+                    1: (100, 100),  # TAG 1: Center
+                    2: (150, 100),  # TAG 2: Right side, center height
+                }
+                
+                if tag_id in fixed_positions:
+                    x, y = fixed_positions[tag_id]
                     
-            else:
-                if PRINT_PACKET_LOGS:
-                    print(f"Warning: Tag ID {tag_id} out of range")
+                    # Set position DIRECTLY without Kalman filter
+                    tag.x = x
+                    tag.y = y
+                    tag.raw_x = x
+                    tag.raw_y = y
+                    tag.status = True
+                    tag.last_update = time.time()
+                    
+                    # Only print first time we see each tag
+                    if tag_id not in self.tags_initialized:
+                        self.tags_initialized.add(tag_id)
+                        print(f"✓ Tag {tag_id} initialized at ({x}, {y})")
+                
+                # Print occasionally for active tags
+                if self.packets_received % 200 == 0:
+                    print(f"✓ Tag {tag_id} stable at ({tag.x}, {tag.y}) - Timestamp: {timestamp}")
 
         except json.JSONDecodeError:
-            # Non-JSON messages might be log messages
-            if not message.startswith("["):
-                if PRINT_PACKET_LOGS:
-                    print(f"[LOG] {message}")
-                    
+            pass
         except Exception as e:
             self.error_count += 1
-            if PRINT_PACKET_LOGS:
-                print(f"Process error: {e}")
 
     def is_connected(self, timeout=2):
-        """
-        Check if we're receiving data
-        
-        Args:
-            timeout: Seconds since last packet
-            
-        Returns:
-            bool: True if connected
-        """
+        """Check if we're receiving data"""
         return (time.time() - self.last_packet_time) < timeout
 
     def get_statistics(self):
-        """
-        Get receiver statistics
-        
-        Returns:
-            dict: Statistics dictionary
-        """
+        """Get receiver statistics"""
         return {
             'packets_received': self.packets_received,
             'packets_per_second': self.packets_per_second,
             'error_count': self.error_count,
-            'uptime': time.time() - self.last_second,
+            'uptime': 0,
             'connected': self.is_connected()
         }
 
     def stop(self):
-        """Stop the receiver and close socket"""
+        """Stop the receiver"""
         print("Stopping UDP receiver...")
         self.running = False
         
-        # Wait for thread to finish
         if self.thread.is_alive():
             self.thread.join(timeout=1.0)
         
         self.sock.close()
-        print("UDP receiver stopped")
+        print(f"UDP receiver stopped - Total packets: {self.packets_received}")
 
     def reset_statistics(self):
-        """Reset all statistics counters"""
+        """Reset statistics"""
         self.packets_received = 0
         self.packets_per_second = 0
         self.second_counter = 0

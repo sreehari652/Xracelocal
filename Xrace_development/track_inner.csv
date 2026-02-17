@@ -1,0 +1,29 @@
+# Wide Oval Racing Track
+# Inner boundary (inner wall)
+# Track WIDTH = 30cm between inner and outer
+
+# INNER BOUNDARY
+50,75
+60,68
+75,63
+95,60
+115,60
+135,63
+150,68
+160,75
+165,85
+167,100
+167,120
+165,135
+160,145
+150,152
+135,157
+115,160
+95,160
+75,157
+60,152
+50,145
+45,135
+43,120
+43,100
+45,85
