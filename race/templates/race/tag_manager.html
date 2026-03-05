@@ -139,6 +139,12 @@ canvas{border-radius:8px;border:1px solid var(--border);background:var(--bg);max
 .pcard-timing-value.best{color:#ffd700}
 .pcard-timing-value.no-data{color:rgba(255,255,255,0.25);font-size:.72rem}
 .pcard-cp-row{display:flex;align-items:center;gap:3px;margin-top:5px;padding-top:5px;border-top:1px solid rgba(255,255,255,0.06)}
+.pcard-penalty{margin-top:4px;display:flex;gap:4px;flex-wrap:wrap}
+.pen-chip{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:10px;font-size:.58rem;font-weight:700;font-family:'JetBrains Mono',monospace;letter-spacing:.5px}
+.pen-wall{background:rgba(255,107,53,.15);color:#ff6b35;border:1px solid rgba(255,107,53,.35)}
+.pen-car{background:rgba(255,59,92,.15);color:#ff3b5c;border:1px solid rgba(255,59,92,.35)}
+.pen-total{background:rgba(255,215,0,.12);color:#ffd700;border:1px solid rgba(255,215,0,.3)}
+.pen-bonus{background:rgba(0,255,136,.12);color:#00ff88;border:1px solid rgba(0,255,136,.3)}
 .tag-row{margin-top:5px}
 .tag-inp{width:100%;padding:5px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monospace;font-size:.8rem;outline:none}
 .tag-inp:focus{border-color:var(--accent)}
@@ -256,32 +262,31 @@ const ANC = [
 // ═══════════════════════════════════════════════════════════
 // ★ EMBEDDED TRACK  (arena cm coords — matches ws_bridge.py CHECKPOINTS/START_LINE)
 // ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
+// ★ TRACK — 12-checkpoint full circuit  (arena: 213×240 cm)
+//   S/F vertical at x=60, y=100..140  car crosses RIGHT→LEFT
+//   All 12 CPs must be hit in order before S/F crossing counts
+// ═══════════════════════════════════════════════════════════
 const CSV_TRACK = {
-  center: [
-    {x:60,y:120},{x:60,y:180},{x:30,y:210},{x:60,y:230},{x:110,y:235},
-    {x:160,y:230},{x:195,y:210},{x:205,y:160},{x:195,y:110},
-    {x:160,y:80},{x:110,y:70},{x:80,y:80},{x:60,y:100},{x:60,y:120}
-  ],
-  inner: [
-    {x:42.5,y:115.9},{x:43.4,y:173.1},{x:12.1,y:211.8},{x:53.9,y:246.9},
-    {x:110,y:253},{x:165.5,y:247.1},{x:209.6,y:220.5},{x:223,y:160},
-    {x:210.5,y:100.9},{x:167.9,y:63.8},{x:108.9,y:52},{x:68.2,y:66.4},
-    {x:42.5,y:115.9}
-  ],
-  outer: [
-    {x:77.5,y:124.1},{x:76.6,y:186.9},{x:47.9,y:208.2},{x:66.1,y:213.1},
-    {x:110,y:217},{x:154.5,y:212.9},{x:180.4,y:199.5},{x:187,y:160},
-    {x:179.5,y:119.1},{x:152.1,y:96.2},{x:111.1,y:88},{x:91.8,y:93.6},
-    {x:77.5,y:124.1}
-  ],
-  // S/F line: car crosses LEFT→RIGHT (x increases past 60) to count
+  center: [{x:75,y:120},{x:45,y:120},{x:20,y:120},{x:12,y:160},{x:12,y:200},{x:30,y:222},{x:65,y:233},{x:110,y:237},{x:155,y:233},{x:188,y:218},{x:205,y:190},{x:208,y:155},{x:205,y:120},{x:195,y:90},{x:165,y:70},{x:130,y:62},{x:110,y:60},{x:90,y:62},{x:68,y:70},{x:52,y:85},{x:55,y:105},{x:75,y:120}],
+  inner:  [{x:63.4,y:112.2},{x:45.0,y:106.0},{x:9.2,y:111.1},{x:-1.9,y:158.6},{x:-1.4,y:203.9},{x:22.6,y:233.9},{x:62.4,y:246.8},{x:110.0,y:251.0},{x:158.3,y:246.6},{x:197.1,y:228.6},{x:218.3,y:194.2},{x:222.0,y:155.0},{x:218.7,y:117.3},{x:205.9,y:81.3},{x:170.5,y:57.1},{x:132.5,y:48.2},{x:110.0,y:46.0},{x:86.8,y:48.4},{x:60.8,y:58.0},{x:38.9,y:80.1},{x:43.3,y:112.7},{x:63.4,y:112.2}],
+  outer:  [{x:86.6,y:127.8},{x:45.0,y:134.0},{x:30.8,y:128.9},{x:25.9,y:161.4},{x:25.4,y:196.1},{x:37.4,y:210.1},{x:67.6,y:219.2},{x:110.0,y:223.0},{x:151.7,y:219.4},{x:178.9,y:207.4},{x:191.7,y:185.8},{x:194.0,y:155.0},{x:191.3,y:122.7},{x:184.1,y:98.7},{x:159.5,y:82.9},{x:127.5,y:75.8},{x:110.0,y:74.0},{x:93.2,y:75.6},{x:75.2,y:82.0},{x:65.1,y:89.9},{x:66.7,y:97.3},{x:86.6,y:127.8}],
+  // S/F: car crosses RIGHT→LEFT (x decreasing past 60, y in 100-140)
   start: {x1:60, y1:100, x2:60, y2:140},
-  // Mandatory checkpoints — must hit ALL in order CP0→CP1→CP2→CP3 before S/F counts
+  // 12 mandatory checkpoints in order — shortcutting voids the lap
   checkpoints: [
-    {id:0, x:110, y:232, r:28, label:'TOP'},
-    {id:1, x:200, y:155, r:28, label:'RIGHT'},
-    {id:2, x:110, y:73,  r:28, label:'BOTTOM'},
-    {id:3, x:33,  y:130, r:28, label:'LEFT'},
+    {id:0,  x:15,  y:155, r:20, label:"L-MID"},
+    {id:1,  x:15,  y:205, r:20, label:"TL-BEND"},
+    {id:2,  x:65,  y:233, r:20, label:"TOP-L"},
+    {id:3,  x:110, y:237, r:20, label:"TOP-C"},
+    {id:4,  x:158, y:233, r:20, label:"TOP-R"},
+    {id:5,  x:200, y:200, r:20, label:"TR-BEND"},
+    {id:6,  x:208, y:155, r:20, label:"R-MID"},
+    {id:7,  x:200, y:100, r:20, label:"RB-BEND"},
+    {id:8,  x:160, y:68,  r:20, label:"BOT-R"},
+    {id:9,  x:110, y:60,  r:20, label:"BOT-C"},
+    {id:10, x:60,  y:70,  r:20, label:"BOT-L"},
+    {id:11, x:52,  y:92,  r:20, label:"APPROACH"},
   ]
 };
 
@@ -683,6 +688,15 @@ function draw() {
     ctx.fillStyle='rgba(0,0,0,0.65)'; ctx.fillRect(p.px-lw/2,p.py-32,lw,16);
     ctx.fillStyle=color; ctx.fillText(label,p.px,p.py-20);
 
+    // ★ Wall/penalty flash ring — orange pulse when recently penalised
+    const wHits=d.wallHits||0, cHits=d.carHits||0;
+    if ((wHits>0||cHits>0) && Math.sin(now/150+tid)>0) {
+      ctx.strokeStyle= wHits>0 ? '#ff6b35' : '#ff3b5c';
+      ctx.lineWidth=3; ctx.globalAlpha=0.65;
+      ctx.beginPath(); ctx.arc(p.px,p.py,15,0,Math.PI*2); ctx.stroke();
+      ctx.globalAlpha=1;
+    }
+
     const lapInfo=d.lapInfo;
     if (lapInfo&&lapInfo.is_racing) {
       const elapsed=d.lapStartTime?(now-d.lapStartTime)/1000:(lapInfo.current_lap_elapsed||0);
@@ -831,13 +845,20 @@ function connectWS() {
           msg.cars.forEach(car=>{
             const tid=parseInt(car.tag_id,10);
             if (isNaN(tid)) return;
-            if (!tagData[tid]) tagData[tid]={x:0,y:0,trail:[],lastTime:0,speed:0,lapInfo:null,lapStartTime:null};
+            if (!tagData[tid]) tagData[tid]={x:0,y:0,trail:[],lastTime:0,speed:0,lapInfo:null,lapStartTime:null,wallHits:0,carHits:0,penTotal:0,bonus:0};
             if (car.x!=null) tagData[tid].x=car.x;
             if (car.y!=null) tagData[tid].y=car.y;
             tagData[tid].lastTime=Date.now();
             const prevRacing = tagData[tid].lapInfo?.is_racing;
             tagData[tid].lapInfo=car.lap_info;
             if (car.speed!=null) tagData[tid].speed=car.speed;
+            // ★ Store penalty/collision data
+            if (car.wall_hits!=null)     tagData[tid].wallHits  = car.wall_hits;
+            if (car.car_collisions!=null) tagData[tid].carHits   = car.car_collisions;
+            if (car.lap_info?.open_lap)  {
+              tagData[tid].penTotal = car.lap_info.open_lap?.penalty ?? tagData[tid].penTotal;
+              tagData[tid].bonus    = car.lap_info.open_lap?.bonus   ?? tagData[tid].bonus;
+            }
             // If racing status just changed, re-render player cards
             if (prevRacing !== car.lap_info?.is_racing) needPlayerRerender = true;
           });
@@ -847,81 +868,43 @@ function connectWS() {
         return;
       }
 
-      // ★★★ TAG_POSITION — outlier rejection + EMA smoothing ★★★
+      // TAG_POSITION — raw pass-through, no filtering
       if (msg.type==='tag_position') {
         const tid=parseInt(msg.tag_id,10);
         if (isNaN(tid)) return;
 
-        // ── RAW MONITOR: log every incoming packet before any filtering ──
         rawMonitorIngest(tid, msg);
 
-        if (!tagData[tid]) tagData[tid]={x:0,y:0,trail:[],lastTime:0,speed:0,lapInfo:null,lapStartTime:null};
+        if (!tagData[tid]) tagData[tid]={x:0,y:0,trail:[],lastTime:0,speed:0,lapInfo:null,lapStartTime:null,wallHits:0,carHits:0,penTotal:0,bonus:0};
 
-        let rx=msg.x, ry=msg.y;
-        const prev=tagData[tid];
-
-        // ── ADAPTIVE FILTER for WiFi UWB noise ──────────────────────────
-        // WiFi UWB has ~20-40cm noise floor. Strategy:
-        //   • Hard-reject outlier jumps (>MAX_JUMP_CM)
-        //   • Track a rolling speed estimate from last N raw samples
-        //   • If car appears stationary (raw speed < STILL_THRESHOLD):
-        //       apply VERY strong smoothing (alpha=0.06) — nearly frozen
-        //   • If car is moving:
-        //       apply medium smoothing (alpha=0.20) — responsive but stable
-        //   • Additionally: only move the display point if the EMA-filtered
-        //     change exceeds DEAD_ZONE_CM — stops sub-noise pixel jitter
-
-        const STILL_THRESHOLD = 8;   // cm/s — below this = treat as stationary
-        const DEAD_ZONE_CM    = 3;   // cm — ignore movements smaller than this
-        const ALPHA_STILL     = 0.06; // very heavy smoothing when still
-        const ALPHA_MOVING    = 0.20; // medium smoothing when moving
-
-        if (prev.lastTime > 0) {
-          const dx = rx - prev.x, dy = ry - prev.y;
-          const dist = Math.sqrt(dx*dx + dy*dy);
-
-          // Hard outlier reject
-          if (dist > MAX_JUMP_CM) {
-            rawMonitorMarkDropped();
-            return;
-          }
-
-          // Estimate instantaneous speed from raw positions
-          const dtSec = (Date.now() - prev.lastTime) / 1000 || 0.033;
-          const rawSpeedCms = dist / dtSec;
-
-          // Choose alpha based on stillness
-          const alpha = rawSpeedCms < STILL_THRESHOLD ? ALPHA_STILL : ALPHA_MOVING;
-
-          const smoothX = prev.x + alpha * (rx - prev.x);
-          const smoothY = prev.y + alpha * (ry - prev.y);
-
-          // Dead-zone: only update display if smoothed change > threshold
-          const smoothDist = Math.sqrt((smoothX-prev.x)**2 + (smoothY-prev.y)**2);
-          if (smoothDist < DEAD_ZONE_CM) {
-            // Position didn't change enough — still update lastTime but keep coords
-            tagData[tid].lastTime = Date.now();
-            tagData[tid].speed    = msg.speed ?? tagData[tid].speed;
-            packetsThisSec++; totalPackets++;
-            updatePositionLabels();
-            return;
-          }
-          rx = smoothX;
-          ry = smoothY;
+        // Light EMA for visual smoothing — Kalman in bridge handles the heavy lifting
+        // alpha=0.25: smooth enough to hide WiFi jitter, responsive enough to track movement
+        const _EMA = 0.25;
+        if (tagData[tid].lastTime > 0) {
+          tagData[tid].x = tagData[tid].x + _EMA * (msg.x - tagData[tid].x);
+          tagData[tid].y = tagData[tid].y + _EMA * (msg.y - tagData[tid].y);
+        } else {
+          tagData[tid].x = msg.x;  // first packet: snap directly
+          tagData[tid].y = msg.y;
         }
-
-        tagData[tid].x = rx;
-        tagData[tid].y = ry;
         tagData[tid].speed = msg.speed ?? tagData[tid].speed;
         tagData[tid].lastTime = Date.now();
+        // ★ Update penalty/collision counts from per-packet data
+        if (msg.wall_hits    != null) tagData[tid].wallHits  = msg.wall_hits;
+        if (msg.car_collisions!=null) tagData[tid].carHits   = msg.car_collisions;
+        if (msg.lap_info     != null) {
+          const prevR = tagData[tid].lapInfo?.is_racing;
+          tagData[tid].lapInfo = msg.lap_info;
+          if (prevR !== msg.lap_info?.is_racing) setTimeout(renderPlayers, 10);
+        }
 
-        tagData[tid].trail.push({x:rx, y:ry});
+        tagData[tid].trail.push({x:msg.x, y:msg.y});
         if (tagData[tid].trail.length > 40) tagData[tid].trail.shift();
 
         packetsThisSec++;
         totalPackets++;
         if (totalPackets%20===0) {
-          dbg('d_pos',`Tag${tid} (${rx.toFixed(0)},${ry.toFixed(0)})cm`,'ok');
+          dbg('d_pos',`Tag${tid} (${msg.x.toFixed(0)},${msg.y.toFixed(0)})cm`,'ok');
           refreshDebugBar();
         }
 
@@ -987,8 +970,23 @@ function connectWS() {
               return `CP${ev.cp_index}  ${ev.car_name}`;
             }
             if (ev.type==='race_finish') return `FINISH  ${ev.car_name}`;
-            if (ev.type==='wall')        return `WALL  ${ev.car_name}`;
-            if (ev.type==='car')         return `HIT  ${ev.attacker_name} → ${ev.victim_name}`;
+            if (ev.type==='wall') {
+              // Increment wall hit counter in tagData immediately
+              const _wp=players.find(p=>p.player_name===ev.car_name);
+              if (_wp&&_wp.tag_id!==null) {
+                const _wt=parseInt(_wp.tag_id,10);
+                if (!isNaN(_wt)&&tagData[_wt]) { tagData[_wt].wallHits=(tagData[_wt].wallHits||0)+1; renderPlayers(); }
+              }
+              return `🚧 WALL  ${ev.car_name}`;
+            }
+            if (ev.type==='car') {
+              const _cp=players.find(p=>p.player_name===ev.attacker_name);
+              if (_cp&&_cp.tag_id!==null) {
+                const _ct=parseInt(_cp.tag_id,10);
+                if (!isNaN(_ct)&&tagData[_ct]) { tagData[_ct].carHits=(tagData[_ct].carHits||0)+1; renderPlayers(); }
+              }
+              return `💥 HIT  ${ev.attacker_name} → ${ev.victim_name}`;
+            }
             return JSON.stringify(ev);
           }));
         }
@@ -1306,6 +1304,22 @@ function renderCards(editable,now) {
       const lb     = liveLeaderboard.find(r=>r.car_id===tid);
       const bestElp= (lb && lb.best_elp < 1e9) ? lb.best_elp : null;
 
+      // Penalty chips
+      const wallHits = d.wallHits || 0;
+      const carHits  = d.carHits  || 0;
+      const lb_pen   = liveLeaderboard.find(r=>r.car_id===tid);
+      const penTot   = lb_pen?.penalty_total ?? 0;
+      const bonTot   = lb_pen?.bonus_total   ?? 0;
+      let penaltyChips = '';
+      if (wallHits>0||carHits>0||penTot>0) {
+        penaltyChips = '<div class="pcard-penalty">';
+        if (wallHits>0) penaltyChips += `<span class="pen-chip pen-wall">🚧 ${wallHits}×wall</span>`;
+        if (carHits>0)  penaltyChips += `<span class="pen-chip pen-car">💥 ${carHits}×hit</span>`;
+        if (penTot>0)   penaltyChips += `<span class="pen-chip pen-total">+${penTot.toFixed(1)}s</span>`;
+        if (bonTot>0)   penaltyChips += `<span class="pen-chip pen-bonus">-${bonTot.toFixed(1)}s bonus</span>`;
+        penaltyChips += '</div>';
+      }
+
       // Checkpoint pips
       const cpPips = CSV_TRACK.checkpoints.map(cp => {
         const done = cp.id < cpHit;
@@ -1334,6 +1348,7 @@ function renderCards(editable,now) {
           ${cpPips}
           <span style="font-size:.58rem;color:rgba(255,255,255,0.3);margin-left:4px;">${cpHit}/${cpTotal}</span>
         </div>
+        ${penaltyChips}
       </div>`;
     } else if (d?.lapInfo?.race_finished) {
       const lb     = liveLeaderboard.find(r=>r.car_id===tid);

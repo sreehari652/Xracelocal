@@ -68,8 +68,10 @@ current_group_id: int | None = None
 #   so Kalman trusts its own prediction more than the raw readings.
 #   Higher MEASUREMENT_NOISE = smoother but more lag.
 #   Lower PROCESS_NOISE = assumes car moves predictably (less jitter).
-KALMAN_PROCESS_NOISE     = 0.05   # was 0.1  — smoother velocity model
-KALMAN_MEASUREMENT_NOISE = 25.0   # was 5.0  — distrust noisy WiFi readings more
+# Kalman gain k = PROCESS/(PROCESS+MEASUREMENT)
+# k≈0.20 means 20% new measurement, 80% prediction — good for WiFi UWB ±15cm noise
+KALMAN_PROCESS_NOISE     = 2.0    # controls how fast Kalman tracks real movement
+KALMAN_MEASUREMENT_NOISE = 8.0    # noise floor of WiFi UWB (~15cm → variance~8)
 
 RSSI_EXCELLENT     = -60
 RSSI_POOR          = -90
@@ -93,12 +95,22 @@ LINE_Y_TOLERANCE        = 30     # cm — generous Y margin for WiFi UWB noise
 # Crossing direction: track goes RIGHT→LEFT (x decreases from ~80 to ~40 past S/F)
 SF_CROSSING_DIR         = 'right_to_left'   # 'left_to_right' or 'right_to_left'
 
-# Mandatory checkpoints (x, y, radius_cm) — must hit ALL in order for lap to count
+# ★ 12 mandatory checkpoints (x, y, radius_cm) in traversal order
+# Car must hit CP0→CP1→...→CP11 in sequence before S/F crossing counts as a lap.
+# Radius = 20cm (tight enough to prevent cutting, large enough for WiFi UWB noise).
 CHECKPOINTS = [
-    (110, 232, 28),   # CP0 — top
-    (200, 155, 28),   # CP1 — right
-    (110,  73, 28),   # CP2 — bottom
-    ( 33, 130, 28),   # CP3 — left (enforces full loop, past S/F from wrong side)
+    ( 15, 155, 20),   # CP0  — L-MID      (left straight after S/F)
+    ( 15, 205, 20),   # CP1  — TL-BEND    (top-left bend)
+    ( 65, 233, 20),   # CP2  — TOP-L      (top-left)
+    (110, 237, 20),   # CP3  — TOP-C      (top center, widest)
+    (158, 233, 20),   # CP4  — TOP-R      (top-right)
+    (200, 200, 20),   # CP5  — TR-BEND    (top-right corner)
+    (208, 155, 20),   # CP6  — R-MID      (right center, rightmost)
+    (200, 100, 20),   # CP7  — RB-BEND    (right-bottom corner)
+    (160,  68, 20),   # CP8  — BOT-R      (bottom-right)
+    (110,  60, 20),   # CP9  — BOT-C      (bottom center, lowest)
+    ( 60,  70, 20),   # CP10 — BOT-L      (bottom-left)
+    ( 52,  92, 20),   # CP11 — APPROACH   (final approach to S/F)
 ]
 
 CORNER_CUT_PENALTY         = 3.0
@@ -404,29 +416,12 @@ class TagState:
         self.pkt_total=self.pkt_accepted=self.pkt_rejected=self.clamped_count=0
         self.last_ranges=[0]*ANCHOR_COUNT
 
-    # ★ WiFi UWB stillness detector constants
-    _STILL_WINDOW   = 8    # samples to check for stillness
-    _STILL_RADIUS   = 22   # cm — if all last N samples within this radius → still
-    _STILL_SNAP     = 5    # cm — snap threshold once declared still
-
     def update_position(self, rx, ry, quality, anc, now):
         dt=max(0.001,min((now-self.last_update) if self.last_update else 0.033, 1.0))
         self.raw_x,self.raw_y=rx,ry
 
-        # ── Kalman filter ──
+        # Kalman filter — smooths WiFi UWB noise without freezing movement
         kx, ky = self.kalman.update(rx, ry, dt)
-
-        # ── Stillness snap: if recent history is all within noise radius,
-        #    snap to the centroid instead of jittering around it ──
-        if len(self._pos_buf) >= self._STILL_WINDOW:
-            recent = list(self._pos_buf)[-self._STILL_WINDOW:]
-            cx = sum(p['x'] for p in recent) / len(recent)
-            cy = sum(p['y'] for p in recent) / len(recent)
-            max_dist = max(math.hypot(p['x']-cx, p['y']-cy) for p in recent)
-            if max_dist < self._STILL_RADIUS:
-                # Car is stationary — snap hard to centroid, ignore Kalman drift
-                kx, ky = cx, cy
-
         self.x, self.y = kx, ky
         self.quality=quality; self.anchor_count=anc
         self.status=True; self.last_update=now
@@ -1107,6 +1102,8 @@ def udp_receiver():
             game_evts=process_race_update(tid,now)
 
             if connected_clients and event_loop:
+                li=race_mgr.get_info(tid,now)
+                open_lap=scoring._open.get(tid)
                 msg=json.dumps(dict(
                     type="tag_position",tag_id=tid,
                     x=round(tag.x,1),y=round(tag.y,1),
@@ -1116,7 +1113,13 @@ def udp_receiver():
                     speed_cms=round(tag.speed_cms,1),
                     speed_unit=SPEED_DISPLAY_UNIT,
                     quality=quality,anchor_count=anc_count,
-                    timestamp=now,game_events=game_evts))
+                    timestamp=now,game_events=game_evts,
+                    # ★ Live penalty data so frontend shows it immediately
+                    wall_hits=len(col_eng.wall_hits(tid)),
+                    car_collisions=len(col_eng.car_events(tid)),
+                    current_penalty=round(open_lap._pen,2) if open_lap else 0.0,
+                    current_bonus=round(open_lap._bon,2) if open_lap else 0.0,
+                    lap_info=li))
                 asyncio.run_coroutine_threadsafe(broadcast(msg),event_loop)
                 if game_evts:
                     asyncio.run_coroutine_threadsafe(broadcast(build_state(now)),event_loop)
