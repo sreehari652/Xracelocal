@@ -147,28 +147,99 @@ canvas{border-radius:8px;border:1px solid var(--border);background:var(--bg);max
   <span class="ws-pill ws-fail" id="wsPill">● WS</span>
 </div>
 
-<!-- LIVE WALL CONTROLS -->
-<div class="topbar" style="background:var(--panel); border-bottom:1px solid var(--border); min-height:45px; flex-wrap:wrap; gap:8px;">
-  <span style="font-size:.7rem;font-weight:700;color:var(--accent);letter-spacing:1px;text-transform:uppercase;margin-right:10px;">Live Wall:</span>
-  <button class="btn btn-raw" onclick="sendWallCmd('landing_page')">Landing Page</button>
-  <button class="btn btn-raw" onclick="sendWallCmd('rounds_details')">Rounds Details</button>
-  <button class="btn btn-raw" onclick="sendWallCmd('players_details')">Players Details</button>
-  <button class="btn btn-raw" onclick="sendWallCmd('groups_match_details')">Group Match</button>
-  <button class="btn btn-raw" onclick="sendWallCmd('qualification_results')">Qualified/Not</button>
 
-  <span id="nextRoundControls" style="display:none; margin-left:10px; border-left:1px solid var(--border); padding-left:10px;">
-      <button class="btn btn-raw" onclick="sendWallCmd('next_round')">Next Round</button>
-  </span>
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- LIVE WALL SCREEN CONTROLS                                   -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<style>
+.wall-bar {
+  display:flex;align-items:center;gap:6px;padding:6px 14px;
+  background:#0a0f18;border-bottom:2px solid rgba(0,212,255,0.18);
+  flex-shrink:0;flex-wrap:wrap;min-height:48px;
+}
+.wall-label {
+  font-size:.66rem;font-weight:800;color:var(--accent);letter-spacing:2px;
+  text-transform:uppercase;white-space:nowrap;margin-right:6px;
+  border-right:1px solid var(--border);padding-right:10px;
+}
+.wall-group {
+  display:flex;gap:4px;flex-wrap:wrap;align-items:center;
+  border-right:1px solid var(--border);padding-right:10px;margin-right:2px;
+}
+.wall-group-label {
+  font-size:.58rem;color:var(--muted);letter-spacing:1px;
+  text-transform:uppercase;margin-right:2px;white-space:nowrap;
+}
+.btn-wall {
+  padding:5px 11px;border-radius:5px;border:1px solid rgba(0,212,255,0.25);
+  background:rgba(0,212,255,0.08);color:var(--accent);
+  font-family:'Rajdhani',sans-serif;font-size:.73rem;font-weight:700;
+  letter-spacing:.8px;text-transform:uppercase;cursor:pointer;
+  transition:all .15s;white-space:nowrap;flex-shrink:0;
+}
+.btn-wall:hover { background:rgba(0,212,255,0.2);border-color:var(--accent); }
+.btn-wall.active {
+  background:var(--accent);color:#000;
+  border-color:var(--accent);box-shadow:0 0 12px rgba(0,212,255,0.5);
+}
+.btn-wall.sending { opacity:.5;cursor:wait; }
+.btn-wall-danger {
+  background:rgba(255,215,0,0.1);color:var(--yellow);
+  border-color:rgba(255,215,0,0.3);
+}
+.btn-wall-danger:hover { background:rgba(255,215,0,0.22); }
+.wall-status {
+  margin-left:auto;font-family:'JetBrains Mono',monospace;
+  font-size:.62rem;color:var(--muted);white-space:nowrap;flex-shrink:0;
+}
+.wall-status .ws-ok-dot { color:var(--green); }
+.wall-status .ws-err-dot { color:var(--red); }
+</style>
 
-  <span id="finaleControls" style="display:none; margin-left:10px; border-left:1px solid var(--border); padding-left:10px; gap:8px;">
-      <button class="btn btn-raw" onclick="sendWallCmd('finale_details')">Finale Details</button>
-      <button class="btn btn-raw" onclick="sendWallCmd('finale_score_board')">Finale Score Board</button>
-      <button class="btn btn-raw" onclick="sendWallCmd('finale_result')">Finale Result</button>
-      <button class="btn btn-raw" onclick="sendWallCmd('standings')">Standings</button>
-  </span>
+<div class="wall-bar" id="wallBar">
+  <span class="wall-label">🖥 Live Wall</span>
 
-  <button class="btn btn-restart" onclick="sendWallCmd('start_countdown')" style="margin-left:auto;">⏱ Start (3210)</button>
+  <!-- Core screens -->
+  <div class="wall-group">
+    <span class="wall-group-label">General</span>
+    <button class="btn-wall" id="wbtn-landing"    onclick="pushScreen('landing')"   title="Show landing/intro screen">Landing</button>
+    <button class="btn-wall" id="wbtn-players"    onclick="pushScreen('players')"   title="Show all players roster">Players</button>
+    <button class="btn-wall" id="wbtn-standing"   onclick="pushScreen('standing')"  title="Show tournament standings">Standing</button>
+  </div>
+
+  <!-- Group / Round screens -->
+  <div class="wall-group">
+    <span class="wall-group-label">Round</span>
+    <button class="btn-wall" id="wbtn-group"      onclick="pushScreen('group')"      title="Show group draw & schedule">Group Draw</button>
+    <button class="btn-wall" id="wbtn-counter"    onclick="pushScreen('counter')"    title="Show countdown timer">Countdown</button>
+  </div>
+
+  <!-- Race screens -->
+  <div class="wall-group">
+    <span class="wall-group-label">Race</span>
+    <button class="btn-wall" id="wbtn-leaderboard" onclick="pushScreen('leaderboard')" title="Show live race leaderboard">Leaderboard</button>
+    <button class="btn-wall" id="wbtn-players_detail" onclick="pushScreen('players_detail')" title="Show per-player lap details">Player Laps</button>
+  </div>
+
+  <!-- Result screens -->
+  <div class="wall-group">
+    <span class="wall-group-label">Results</span>
+    <button class="btn-wall" id="wbtn-qualify"    onclick="pushScreen('qualify')"    title="Show qualification results">Qualify</button>
+  </div>
+
+  <!-- Status indicator -->
+  <div class="wall-status" id="wallStatus">— not sent yet —</div>
 </div>
+
+<!-- Toast notification for wall push result -->
+<div id="wallToast" style="
+  position:fixed;bottom:20px;right:20px;z-index:9999;
+  background:#0d1117;border:1px solid var(--border);border-radius:8px;
+  padding:10px 16px;font-family:'Rajdhani',sans-serif;font-size:.85rem;
+  font-weight:600;color:var(--text);display:none;
+  box-shadow:0 4px 24px rgba(0,0,0,0.5);transition:opacity .3s;
+  max-width:320px;"></div>
+
 
 <div id="dbgBar">
   <span>WS: <span id="d_ws" class="err">disconnected</span></span>
@@ -249,6 +320,7 @@ canvas{border-radius:8px;border:1px solid var(--border);background:var(--bg);max
 // CONFIG
 // ═══════════════════════════════════════════════════════════
 const BASE   = 'https://xraceapi.zyberspace.in';
+const BACKEND_BASE = 'https://xraceapi.zyberspace.in'; // xrace_backend — change to http://localhost:8000 for local dev
 const WS_URL = 'ws://localhost:8001/';
 const API = {
   list:       BASE + '/api/tournaments/',
@@ -824,12 +896,113 @@ async function apiPatch(url,body){const r=await fetch(url,{method:'PATCH',header
 function sendWS(payload){if(ws&&ws.readyState===WebSocket.OPEN){ws.send(JSON.stringify(payload));console.log('[WS→]',payload.type);}else console.warn('[WS] not connected:',payload.type);}
 
 function sendWallCmd(screen, extraData={}) {
+    // Legacy: send raw WS message for non-DB screens (countdown, etc.)
     sendWS({
         type: 'live_wall_command',
         screen: screen,
         ...extraData
     });
 }
+
+// ═══════════════════════════════════════════════════════════
+// LIVE WALL — push full ScreenData from backend to frontend
+// ═══════════════════════════════════════════════════════════
+
+// Which tournament slug is currently selected
+function getCurrentTournamentSlug() {
+  return document.getElementById('tSel')?.value || null;
+}
+
+// Tournament ID cache (slug → id)
+let _tournamentIdCache = {};
+async function getTournamentId(slug) {
+  if (_tournamentIdCache[slug]) return _tournamentIdCache[slug];
+  try {
+    const r = await fetch(API.list);
+    const { data } = await r.json();
+    (data || []).forEach(t => { _tournamentIdCache[t.slug] = t.id; });
+    return _tournamentIdCache[slug] || null;
+  } catch(e) { return null; }
+}
+
+let _activeWallScreen = null;
+
+async function pushScreen(screenType) {
+  const slug = getCurrentTournamentSlug();
+  if (!slug) {
+    showWallToast('⚠ Select a tournament first', 'warn');
+    return;
+  }
+
+  const tournamentId = await getTournamentId(slug);
+  if (!tournamentId) {
+    showWallToast('⚠ Could not resolve tournament ID', 'warn');
+    return;
+  }
+
+  // Mark button as sending
+  const btn = document.getElementById('wbtn-' + screenType);
+  if (btn) { btn.classList.add('sending'); btn.disabled = true; }
+
+  try {
+    const resp = await fetch(BACKEND_BASE + '/api/push-live-screen/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tournament_id: tournamentId,
+        display_screen: screenType,
+      }),
+    });
+    const result = await resp.json();
+
+    if (result.success && result.broadcast_ok) {
+      setActiveWallBtn(screenType);
+      showWallToast(`✓ Live wall → ${screenType.toUpperCase()}`, 'ok');
+      updateWallStatus(screenType, true);
+    } else {
+      const err = result.broadcast_response?.error || 'Broadcast failed';
+      showWallToast(`✗ ${err}`, 'err');
+      updateWallStatus(screenType, false);
+    }
+  } catch(e) {
+    showWallToast('✗ Network error: ' + e.message, 'err');
+    updateWallStatus(screenType, false);
+  } finally {
+    if (btn) { btn.classList.remove('sending'); btn.disabled = false; }
+  }
+}
+
+function setActiveWallBtn(screenType) {
+  document.querySelectorAll('.btn-wall').forEach(b => b.classList.remove('active'));
+  const btn = document.getElementById('wbtn-' + screenType);
+  if (btn) btn.classList.add('active');
+  _activeWallScreen = screenType;
+}
+
+function updateWallStatus(screenType, ok) {
+  const el = document.getElementById('wallStatus');
+  if (!el) return;
+  const now = new Date().toLocaleTimeString('en-GB', {hour12:false});
+  const dot = ok ? '<span class="ws-ok-dot">●</span>' : '<span class="ws-err-dot">✗</span>';
+  el.innerHTML = `${dot} ${screenType} · ${now}`;
+}
+
+function showWallToast(msg, type) {
+  const toast = document.getElementById('wallToast');
+  if (!toast) return;
+  const colors = { ok: '#00ff88', err: '#ff3b5c', warn: '#ffd700' };
+  toast.style.borderColor = colors[type] || '#1e2a3a';
+  toast.style.color = colors[type] || '#e2eaf4';
+  toast.textContent = msg;
+  toast.style.display = 'block';
+  toast.style.opacity = '1';
+  clearTimeout(toast._timer);
+  toast._timer = setTimeout(() => {
+    toast.style.opacity = '0';
+    setTimeout(() => { toast.style.display = 'none'; }, 300);
+  }, 2800);
+}
+
 
 // ═══════════════════════════════════════════════════════════
 // TOURNAMENT / GROUP
