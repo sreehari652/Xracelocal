@@ -11,8 +11,8 @@ UDP packet format from anchor ESP32:
   • range   8 values, first 4 used, in cm
   • ancid   which anchor each slot corresponds to (-1 = unused)
 
-All positions and distances are in METRES internally.
-Track CSV coordinates must also be in metres.
+All positions and distances are in CENTIMETRES internally.
+Track CSV coordinates must also be in cm.
 """
 
 import asyncio, websockets, socket, json, math, time, threading, signal, sys
@@ -29,22 +29,22 @@ WS_PORT  = 8001
 DJANGO_API_BASE = 'https://xraceapi.zyberspace.in'
 LAP_API_URL     = f'{DJANGO_API_BASE}/api/record-lap/'
 
-# ── Anchor physical positions in METRES ──────────────────────────────
-#   A0 = origin (0,0)          A1 = (6.10, 0)
-#   A2 = (6.10, 4.40)          A3 = (0, 4.40)
+# ── Anchor physical positions in CENTIMETRES ──────────────────────────────
+#   A0 = origin (0,0)          A1 = (610, 0)
+#   A2 = (610, 440)          A3 = (0, 440)
 ANCHOR_POSITIONS = {
     0: (0.00, 0.00),
-    1: (6.10, 0.00),
-    2: (6.10, 4.40),
-    3: (0.00, 4.40),
+    1: (610.00, 0.00),
+    2: (610.00, 440.00),
+    3: (0.00, 440.00),
 }
 
 ANCHOR_COUNT = 4
 TAG_COUNT    = 6
 
-# Range validity limits in METRES
-MIN_RANGE_M = 0.10
-MAX_RANGE_M = 14.50
+# Range validity limits in CENTIMETRES
+MIN_RANGE_M = 10.0
+MAX_RANGE_M = 1450.0
 
 # ── Default race / penalty values (overridden by admin_start payload) ──
 TOTAL_LAPS_DEFAULT                     = 10
@@ -60,20 +60,20 @@ WALL_HIT_PENALTY               = WALL_HIT_PENALTY_DEFAULT
 CAR_COLLISION_ATTACKER_PENALTY = CAR_COLLISION_ATTACKER_PENALTY_DEFAULT
 CAR_COLLISION_VICTIM_BONUS     = CAR_COLLISION_VICTIM_BONUS_DEFAULT
 
-# ── Default start/finish in METRES (overridden by CSV) ────────────────
-START_LINE_X         = 4.90
-START_LINE_Y1        = 3.00
-START_LINE_Y2        = 3.40
-LINE_CROSS_TOLERANCE = 0.08   # metres
-LINE_Y_TOLERANCE     = 0.30   # metres
+# ── Default start/finish in CENTIMETRES (overridden by CSV) ────────────────
+START_LINE_X         = 490.00
+START_LINE_Y1        = 300.00
+START_LINE_Y2        = 340.00
+LINE_CROSS_TOLERANCE = 8.00   # cm
+LINE_Y_TOLERANCE     = 30.00   # cm
 SF_CROSSING_DIR      = 'left_to_right'
 
-# ── Default checkpoints in METRES (overridden by CSV) ─────────────────
+# ── Default checkpoints in CENTIMETRES (overridden by CSV) ─────────────────
 CHECKPOINTS = [
-    (3.90, 3.20, 0.22), (2.90, 3.25, 0.22), (1.90, 3.10, 0.22),
-    (0.80, 2.90, 0.22), (0.55, 2.40, 0.22), (0.80, 1.85, 0.22),
-    (1.60, 1.40, 0.22), (2.80, 1.00, 0.22), (4.20, 1.10, 0.22),
-    (5.30, 1.65, 0.22), (5.55, 2.35, 0.22), (5.30, 2.95, 0.22),
+    (390.0, 320.0, 22.0), (290.0, 325.0, 22.0), (190.0, 310.0, 22.0),
+    (80.0, 290.0, 22.0), (55.0, 240.0, 22.0), (80.0, 185.0, 22.0),
+    (160.0, 140.0, 22.0), (280.0, 100.0, 22.0), (420.0, 110.0, 22.0),
+    (530.0, 165.0, 22.0), (555.0, 235.0, 22.0), (530.0, 295.0, 22.0),
 ]
 
 tag_to_gp:        dict       = {}
@@ -81,12 +81,12 @@ current_group_id: int | None = None
 
 CORNER_CUT_PENALTY         = 3.0
 CORNER_CUT_VOID_LAP        = False
-CAR_COLLISION_DISTANCE_M   = 0.25   # metres
+CAR_COLLISION_DISTANCE_M   = 25.0   # cm
 CAR_COLLISION_COOLDOWN     = 1.0
-SPEED_DIFF_THRESHOLD       = 0.10   # m/s
-WALL_TOLERANCE_M           = 0.05   # metres
+SPEED_DIFF_THRESHOLD       = 10.0   # cm/s
+WALL_TOLERANCE_M           = 5.0   # cm
 WALL_COLLISION_COOLDOWN    = 0.5
-MAX_PLAUSIBLE_SPEED_M_S    = 28.0   # m/s  (~100 km/h)
+MAX_PLAUSIBLE_SPEED_M_S    = 2800.0   # cm/s  (~100 km/h)
 SPEED_DISPLAY_UNIT         = 'km/h'
 
 PRINT_LAP_EVENTS       = True
@@ -130,8 +130,8 @@ def parse_at_range(raw_bytes: bytes):
     range_raw = [float(x.strip()) for x in m.group(2).split(',')]
     ancid_raw = [int(x.strip())   for x in m.group(3).split(',')]
 
-    # Hardware reports ranges in cm → convert to metres
-    ranges_m = [r / 100.0 for r in range_raw]
+    # Hardware reports ranges in cm, keeping it as cm
+    ranges_m = range_raw
 
     return tag_id, ranges_m, ancid_raw
 
@@ -422,10 +422,10 @@ class TagState:
     def speed_display(self):
         """Return speed in selected display unit."""
         if SPEED_DISPLAY_UNIT == 'km/h':
-            return self.speed_ms * 3.6
+            return self.speed_ms * 0.036 # cm/s to km/h
         if SPEED_DISPLAY_UNIT == 'm/s':
-            return self.speed_ms
-        return self.speed_ms * 100  # cm/s fallback
+            return self.speed_ms / 100.0
+        return self.speed_ms  # cm/s fallback
 
     def is_active(self):
         return self.status and (time.time() - self.last_update) < TAG_TIMEOUT
@@ -568,8 +568,8 @@ def create_track_from_data(td: TrackData) -> Track:
     return create_oval_track()
 
 
-def create_oval_track(cx=3.05, cy=2.20, ow=2.60, oh=1.90, tw=0.30, n=40):
-    """Default oval track in metres."""
+def create_oval_track(cx=305.0, cy=220.0, ow=260.0, oh=190.0, tw=30.0, n=40):
+    """Default oval track in cm."""
     o, i = [], []
     for k in range(n):
         a = 2*math.pi*k/n
@@ -634,13 +634,13 @@ class LapEngine:
 
         if not crossing: return None
         if not self._on_line(y):
-            print(f"[SF] {self.car_name} crossed but y={y:.3f}m outside Y range — ignored")
+            print(f"[SF] {self.car_name} crossed but y={y:.3f}cm outside Y range — ignored")
             return None
         if now - self._last_cross < MIN_LAP_TIME:
             print(f"[SF] {self.car_name} debounce — ignored")
             return None
 
-        print(f"[SF] ✓ {self.car_name} ({prev_side}→{new_side}) x={x:.3f}m y={y:.3f}m")
+        print(f"[SF] ✓ {self.car_name} ({prev_side}→{new_side}) x={x:.3f}cm y={y:.3f}cm")
         self._last_cross = now
         return self._process_crossing(now)
 
@@ -688,7 +688,7 @@ class LapEngine:
         cx, cy, cr = CHECKPOINTS[self._next_cp]
         if math.hypot(x-cx, y-cy) <= cr:
             idx = self._next_cp
-            print(f"  ✔ CP{idx} | {self.car_name} @ ({x:.3f},{y:.3f})m [{idx+1}/{len(CHECKPOINTS)}]")
+            print(f"  ✔ CP{idx} | {self.car_name} @ ({x:.3f},{y:.3f})cm [{idx+1}/{len(CHECKPOINTS)}]")
             self._next_cp += 1
             self.current_lap_cp_hits.append(idx)
 
@@ -828,7 +828,7 @@ class CollisionEngine:
         self.scoring.car_collision(atk, vic)
         an = self._names.get(atk, f"Car{atk}"); vn = self._names.get(vic, f"Car{vic}")
         if PRINT_COLLISION_EVENTS:
-            print(f"💥 CAR | {an}→{vn} dist={dist:.3f}m  "
+            print(f"💥 CAR | {an}→{vn} dist={dist:.3f}cm  "
                   f"atk+{CAR_COLLISION_ATTACKER_PENALTY}s / vic-{CAR_COLLISION_VICTIM_BONUS}s")
         return dict(type='car', attacker=atk, victim=vic,
                     attacker_name=an, victim_name=vn, dist=round(dist, 3),
@@ -853,7 +853,7 @@ class CollisionEngine:
         n = self._names.get(cid, f"Car{cid}")
         self.anomalies.append(dict(car_id=cid, name=n, speed=spd, time=now))
         if PRINT_ANOMALIES:
-            print(f"⚠️ ANOMALY | {n} speed={spd:.2f}m/s ({spd*3.6:.1f}km/h)")
+            print(f"⚠️ ANOMALY | {n} speed={spd:.2f}cm/s ({spd*0.036:.1f}km/h)")
 
     def wall_hits(self, cid):
         return [e for e in self.events if e['type']=='wall' and e['car_id']==cid]
@@ -1001,8 +1001,8 @@ def udp_receiver():
             tag.last_ranges = [round(r, 4) for r in raw_ranges_m]
             stats['udp_valid'] += 1; stats['tags_seen'].add(tid)
 
-            print(f"[UWB] Tag{tid}  ({rx:.3f},{ry:.3f})m  "
-                  f"ranges={[round(r,2) for r in raw_ranges_m]}m  {quality}  "
+            print(f"[UWB] Tag{tid}  ({rx:.3f},{ry:.3f})cm  "
+                  f"ranges={[round(r,2) for r in raw_ranges_m]}cm  {quality}  "
                   f"{tag.speed_display():.1f}{SPEED_DISPLAY_UNIT}")
 
             game_evts = process_race_update(tid, now)
@@ -1061,13 +1061,13 @@ async def handle_client(ws):
         now = time.time()
         await ws.send(json.dumps(dict(
             type="connection", status="connected",
-            message="UWB Racing — AT+RANGE format, metres",
+            message="UWB Racing — AT+RANGE format, centimetres",
             timestamp=now,
             server_info=dict(
                 udp_port=UDP_PORT, ws_port=WS_PORT,
                 anchor_count=ANCHOR_COUNT, tag_count=TAG_COUNT,
                 total_laps=TOTAL_LAPS,
-                units='metres',
+                units='centimetres',
                 uptime_seconds=(datetime.now()-stats['start']).total_seconds()),
             anchors={str(k):{"x":v[0],"y":v[1]} for k,v in ANCHOR_POSITIONS.items()},
             track=current_track.to_dict(),
@@ -1202,12 +1202,12 @@ async def main():
     ay = [v[1] for v in ANCHOR_POSITIONS.values()]
 
     print(f"\n{'═'*60}")
-    print(f"  UWB RACING — AT+RANGE parser  |  all units: METRES")
+    print(f"  UWB RACING — AT+RANGE parser  |  all units: CENTIMETRES")
     print(f"  UDP={UDP_PORT}  WS={WS_PORT}")
     print(f"  Anchors: {dict(ANCHOR_POSITIONS)}")
-    print(f"  Field: {max(ax)-min(ax):.2f}m × {max(ay)-min(ay):.2f}m")
+    print(f"  Field: {max(ax)-min(ax):.2f}cm × {max(ay)-min(ay):.2f}cm")
     print(f"  UDP format: A{{id}},AT+RANGE=tid:N,...,range:(...),ancid:(...)")
-    print(f"  Ranges: cm from hardware → metres internally")
+    print(f"  Ranges: cm from hardware, internal processing in cm")
     print(f"{'═'*60}\n")
 
     threading.Thread(target=udp_receiver, daemon=True, name="UDP").start()

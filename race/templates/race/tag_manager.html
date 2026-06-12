@@ -147,6 +147,29 @@ canvas{border-radius:8px;border:1px solid var(--border);background:var(--bg);max
   <span class="ws-pill ws-fail" id="wsPill">● WS</span>
 </div>
 
+<!-- LIVE WALL CONTROLS -->
+<div class="topbar" style="background:var(--panel); border-bottom:1px solid var(--border); min-height:45px; flex-wrap:wrap; gap:8px;">
+  <span style="font-size:.7rem;font-weight:700;color:var(--accent);letter-spacing:1px;text-transform:uppercase;margin-right:10px;">Live Wall:</span>
+  <button class="btn btn-raw" onclick="sendWallCmd('landing_page')">Landing Page</button>
+  <button class="btn btn-raw" onclick="sendWallCmd('rounds_details')">Rounds Details</button>
+  <button class="btn btn-raw" onclick="sendWallCmd('players_details')">Players Details</button>
+  <button class="btn btn-raw" onclick="sendWallCmd('groups_match_details')">Group Match</button>
+  <button class="btn btn-raw" onclick="sendWallCmd('qualification_results')">Qualified/Not</button>
+
+  <span id="nextRoundControls" style="display:none; margin-left:10px; border-left:1px solid var(--border); padding-left:10px;">
+      <button class="btn btn-raw" onclick="sendWallCmd('next_round')">Next Round</button>
+  </span>
+
+  <span id="finaleControls" style="display:none; margin-left:10px; border-left:1px solid var(--border); padding-left:10px; gap:8px;">
+      <button class="btn btn-raw" onclick="sendWallCmd('finale_details')">Finale Details</button>
+      <button class="btn btn-raw" onclick="sendWallCmd('finale_score_board')">Finale Score Board</button>
+      <button class="btn btn-raw" onclick="sendWallCmd('finale_result')">Finale Result</button>
+      <button class="btn btn-raw" onclick="sendWallCmd('standings')">Standings</button>
+  </span>
+
+  <button class="btn btn-restart" onclick="sendWallCmd('start_countdown')" style="margin-left:auto;">⏱ Start (3210)</button>
+</div>
+
 <div id="dbgBar">
   <span>WS: <span id="d_ws" class="err">disconnected</span></span>
   <span>Pkts: <span id="d_pkts" class="hi">0</span></span>
@@ -172,8 +195,8 @@ canvas{border-radius:8px;border:1px solid var(--border);background:var(--bg);max
   <div id="rawLog">
     <div class="rlog-row" style="color:#4a5568;">
       <span class="rlog-time">TIME</span><span class="rlog-tag">TAG</span>
-      <span class="rlog-xy">X , Y (m)</span>
-      <span class="rlog-ranges">RANGES [A0,A1,A2,A3] m</span>
+      <span class="rlog-xy">X , Y (cm)</span>
+      <span class="rlog-ranges">RANGES [A0,A1,A2,A3] cm</span>
       <span class="rlog-qual">QUAL</span>
     </div>
   </div>
@@ -238,13 +261,13 @@ const API = {
 
 const CHECKPOINTS_REQUIRED = 5;
 
-// ── Anchor positions in METRES ──────────────────────────────────────
-// A0=(0,0)  A1=(6.10,0)  A2=(6.10,4.40)  A3=(0,4.40)
+// ── Anchor positions in CENTIMETRES ──────────────────────────────────────
+// A0=(0,0)  A1=(610,0)  A2=(610,440)  A3=(0,440)
 const ANC = [
-  {x:0.00, y:0.00},
-  {x:6.10, y:0.00},
-  {x:6.10, y:4.40},
-  {x:0.00, y:4.40},
+  {x:0, y:0},
+  {x:610, y:0},
+  {x:610, y:440},
+  {x:0, y:440},
 ];
 
 const COLORS = ['#00d4ff','#ff3b5c','#00ff88','#ffd700','#a855f7','#ff6b35','#00ffcc','#ff9ff3'];
@@ -341,7 +364,7 @@ function renderCpPanel() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// CANVAS — uses metres directly
+// CANVAS — uses cm directly
 // ═══════════════════════════════════════════════════════════
 const canvas=document.getElementById('c'), ctx=canvas.getContext('2d');
 let cScale,cOffX,cOffY;
@@ -349,12 +372,12 @@ function calcLayout(){
   const xs=ANC.map(a=>a.x),ys=ANC.map(a=>a.y);
   const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
   const w=maxX-minX,h=maxY-minY,pad=60;
-  cScale=Math.min((canvas.width-pad*2)/w,(canvas.height-pad*2)/h)*0.95;
+  cScale=Math.min((canvas.width-pad*2)/(w||1),(canvas.height-pad*2)/(h||1))*0.95;
   cOffX=(canvas.width-w*cScale)/2-minX*cScale;
   cOffY=(canvas.height-h*cScale)/2-minY*cScale;
 }
 calcLayout();
-// Transform world-metres → canvas pixels
+// Transform world-cm → canvas pixels
 function tp(cx,cy){return{px:cOffX+cx*cScale,py:canvas.height-cOffY-cy*cScale};}
 
 // ═══════════════════════════════════════════════════════════
@@ -466,11 +489,11 @@ function draw(){
     ctx.closePath();ctx.fillStyle='rgba(255,215,0,0.8)';ctx.fill();ctx.restore();
   }
 
-  // Checkpoints — metres
+  // Checkpoints — cm
   if(liveTrack.checkpoints.length){
     liveTrack.checkpoints.forEach((cp,idx)=>{
       const p=tp(cp.x,cp.y);
-      // radius: cp.r is in metres → scale to pixels
+      // radius: cp.r is in cm → scale to pixels
       const radiusPx = cp.r * cScale;
 
       const touches = cpTouches[String(idx)] || cpTouches[idx] || [];
@@ -509,17 +532,17 @@ function draw(){
     });
   }
 
-  // Anchors — label in metres
+  // Anchors — label in cm
   ANC.forEach((a,i)=>{
     const p=tp(a.x,a.y);
     ctx.shadowColor='rgba(0,212,255,0.7)';ctx.shadowBlur=12;ctx.fillStyle='#00d4ff';
     ctx.beginPath();ctx.arc(p.px,p.py,8,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;
     ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.beginPath();ctx.arc(p.px,p.py,8,0,Math.PI*2);ctx.stroke();
     ctx.fillStyle='rgba(0,212,255,0.9)';ctx.font='bold 12px Rajdhani,sans-serif';ctx.textAlign='left';
-    ctx.fillText(`A${i} (${a.x},${a.y})m`,p.px+10,p.py-6);
+    ctx.fillText(`A${i} (${a.x},${a.y})cm`,p.px+10,p.py-6);
   });
 
-  // Cars — positions in metres
+  // Cars — positions in cm
   const now=Date.now();
   Object.entries(tagData).forEach(([tidStr,d])=>{
     if(now-d.lastTime>6000)return;
@@ -531,10 +554,10 @@ function draw(){
     const posNum=playerIdx>=0?playerIdx+1:'?';
     const p=tp(d.x,d.y);
 
-    // OOB: more than 0.8m outside anchor bounding box
+    // OOB: more than 80cm outside anchor bounding box
     const xs=ANC.map(a=>a.x),ys=ANC.map(a=>a.y);
-    const oob=d.x<Math.min(...xs)-0.8||d.x>Math.max(...xs)+0.8||
-               d.y<Math.min(...ys)-0.8||d.y>Math.max(...ys)+0.8;
+    const oob=d.x<Math.min(...xs)-80||d.x>Math.max(...xs)+80||
+               d.y<Math.min(...ys)-80||d.y>Math.max(...ys)+80;
 
     if(d.trail.length>1){
       ctx.lineJoin='round';
@@ -592,10 +615,10 @@ function draw(){
       }
     }
 
-    // Position in metres with 3 decimal places
+    // Position in cm
     ctx.font='9px JetBrains Mono,monospace';
     ctx.fillStyle=oob?'#ff8800':'rgba(255,255,255,0.55)';ctx.textAlign='center';
-    ctx.fillText(`${d.x.toFixed(3)},${d.y.toFixed(3)}m`,p.px,p.py+28);
+    ctx.fillText(`${d.x.toFixed(1)},${d.y.toFixed(1)}cm`,p.px,p.py+28);
     if(d.speed!=null){ctx.fillStyle='rgba(255,255,255,0.4)';ctx.fillText(d.speed.toFixed(1)+' km/h',p.px,p.py+39);}
     if(oob){ctx.fillStyle='#ff8800';ctx.font='bold 9px JetBrains Mono,monospace';ctx.fillText('⚠ OOB',p.px,p.py+50);}
     ctx.textAlign='left';
@@ -800,6 +823,14 @@ function getCSRF(){const m=document.cookie.match(/csrftoken=([^;]+)/);return m?m
 async function apiPatch(url,body){const r=await fetch(url,{method:'PATCH',headers:{'Content-Type':'application/json','X-CSRFToken':getCSRF()},credentials:'include',body:JSON.stringify(body)});return r.json();}
 function sendWS(payload){if(ws&&ws.readyState===WebSocket.OPEN){ws.send(JSON.stringify(payload));console.log('[WS→]',payload.type);}else console.warn('[WS] not connected:',payload.type);}
 
+function sendWallCmd(screen, extraData={}) {
+    sendWS({
+        type: 'live_wall_command',
+        screen: screen,
+        ...extraData
+    });
+}
+
 // ═══════════════════════════════════════════════════════════
 // TOURNAMENT / GROUP
 // ═══════════════════════════════════════════════════════════
@@ -832,13 +863,18 @@ async function loadGroups(){
     parseCsvIntoLiveTrack(currentTrackCSV);
   }else{currentTrackCSV='';dbg('d_track','none','warn');}
   gSel.disabled=false;
-  data.rounds.forEach(r=>{const og=document.createElement('optgroup');og.label=`Round ${r.round_no} — ${r.round_name}${r.is_final?' 🏆':''}`;r.groups.forEach(g=>{const o=document.createElement('option');o.value=g.group_id;o.dataset.status=g.group_status||'';o.textContent=g.group_name+(g.group_status?` [${g.group_status}]`:'');og.appendChild(o);});gSel.appendChild(og);});
+  data.rounds.forEach(r=>{const og=document.createElement('optgroup');og.label=`Round ${r.round_no} — ${r.round_name}${r.is_final?' 🏆':''}`;r.groups.forEach(g=>{const o=document.createElement('option');o.value=g.group_id;o.dataset.status=g.group_status||'';o.dataset.is_final=r.is_final?'true':'false';o.textContent=g.group_name+(g.group_status?` [${g.group_status}]`:'');og.appendChild(o);});gSel.appendChild(og);});
 }
 
 async function selectGroup(){
   const gSel=document.getElementById('gSel');currentGroupId=gSel.value||null;reassignMode=false;
-  if(!currentGroupId){players=[];currentGroupStatus='';setBadge('');updateButtons();renderPlayers();return;}
+  if(!currentGroupId){players=[];currentGroupStatus='';setBadge('');updateButtons();renderPlayers();document.getElementById('finaleControls').style.display='none';document.getElementById('nextRoundControls').style.display='none';return;}
   const opt=gSel.options[gSel.selectedIndex];currentGroupStatus=opt.dataset.status||'';
+  
+  const isFinal=opt.dataset.is_final==='true';
+  document.getElementById('finaleControls').style.display = isFinal ? 'inline-flex' : 'none';
+  document.getElementById('nextRoundControls').style.display = isFinal ? 'none' : 'inline-flex';
+
   setBadge(currentGroupStatus);updateButtons();
   const{data}=await apiFetch(API.players+'?group_id='+currentGroupId);
   players=(data||[]).map(p=>({...p,tag_id:(p.tag_id!==null&&p.tag_id!==undefined&&p.tag_id!=='')?parseInt(p.tag_id,10):null}));
@@ -906,7 +942,7 @@ function renderCards(editable,now){
     const color=COLORS[idx%COLORS.length],tid=parseInt(p.tag_id,10),d=!isNaN(tid)?tagData[tid]:null;
     const fresh=d&&(now-d.lastTime)<4000,racing=currentGroupStatus==='live'&&!reassignMode&&fresh;
     let posLine='';
-    if(racing&&d) posLine=`<div class="pcard-pos" id="ppos-${tid}">x:${d.x.toFixed(3)} y:${d.y.toFixed(3)} m · ${(d.speed||0).toFixed(1)} km/h</div>`;
+    if(racing&&d) posLine=`<div class="pcard-pos" id="ppos-${tid}">x:${d.x.toFixed(1)} y:${d.y.toFixed(1)} cm · ${(d.speed||0).toFixed(1)} km/h</div>`;
     else if(currentGroupStatus==='live'&&!reassignMode&&!isNaN(tid)) posLine=`<div class="pcard-sub" style="color:#fbbf24">Waiting for signal…</div>`;
     let lapLine='';
     if(d?.lapInfo?.is_racing){
@@ -954,7 +990,12 @@ function renderCards(editable,now){
     }
     const tagInput=editable?`<div class="tag-row"><input class="tag-inp" type="text" value="${!isNaN(tid)?tid:''}" placeholder="Tag ID (number)" data-gp="${p.gp_id}" onblur="saveTag(this)" onkeydown="if(event.key==='Enter'){event.preventDefault();saveTag(this)}"/><div class="tag-hint" id="hint-${p.gp_id}"></div></div>`:'';
     return `<div class="pcard ${racing?'active pulse':''}" style="--cc:${color}">
-      <div class="pcard-hdr"><div class="pcard-dot"></div><div class="pcard-name">${p.player_name}</div>${!isNaN(tid)?`<span class="pcard-tag">#${tid}</span>`:''}</div>
+      <div class="pcard-hdr">
+        <div class="pcard-dot"></div>
+        <div class="pcard-name">${p.player_name}</div>
+        ${!isNaN(tid)?`<span class="pcard-tag">#${tid}</span>`:''}
+        <button class="btn btn-raw" style="padding:2px 6px;font-size:0.6rem;margin-left:auto;" onclick="sendWallCmd('player_laps', {gp_id: '${p.gp_id}', tag_id: '${p.tag_id}', player_name: '${p.player_name.replace(/'/g, "\\'")}'}); event.stopPropagation();">Wall Laps</button>
+      </div>
       <div class="pcard-sub">${p.player_status||''}</div>${posLine}${lapLine}${tagInput}
     </div>`;
   }).join('');
@@ -963,7 +1004,7 @@ function renderCards(editable,now){
 function updatePositionLabels(){
   if(currentGroupStatus!=='live'||reassignMode)return;
   const now=Date.now();
-  players.forEach(p=>{const tid=parseInt(p.tag_id,10);if(isNaN(tid))return;const d=tagData[tid];if(!d)return;const el=document.getElementById('ppos-'+tid);if(el&&(now-d.lastTime)<4000)el.textContent=`x:${d.x.toFixed(3)} y:${d.y.toFixed(3)} m · ${(d.speed||0).toFixed(1)} km/h`;else if(!el&&(now-d.lastTime)<4000)renderPlayers();});
+  players.forEach(p=>{const tid=parseInt(p.tag_id,10);if(isNaN(tid))return;const d=tagData[tid];if(!d)return;const el=document.getElementById('ppos-'+tid);if(el&&(now-d.lastTime)<4000)el.textContent=`x:${d.x.toFixed(1)} y:${d.y.toFixed(1)} cm · ${(d.speed||0).toFixed(1)} km/h`;else if(!el&&(now-d.lastTime)<4000)renderPlayers();});
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1002,7 +1043,7 @@ function renderLeaderboard(){
 }
 
 // ═══════════════════════════════════════════════════════════
-// RAW MONITOR — ranges shown in metres
+// RAW MONITOR — ranges shown in cm
 // ═══════════════════════════════════════════════════════════
 const RAW_MAX_ROWS=80;let rawPaused=false,rawTagCounters={};
 function rawMonitorIngest(tid,msg){
@@ -1013,11 +1054,11 @@ function rawMonitorIngest(tid,msg){
   renderTagRatePills();if(rawPaused)return;
   const log=document.getElementById('rawLog');
   const timeStr=new Date().toLocaleTimeString('en-GB',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'})+'.'+String(now%1000).padStart(3,'0');
-  // ranges are now in metres (4 decimal places)
-  const ranges=Array.isArray(msg.range)?msg.range.map(r=>Number(r).toFixed(2).padStart(6,' ')).join(' '):'—';
+  // ranges are now in cm (0 decimal places)
+  const ranges=Array.isArray(msg.range)?msg.range.map(r=>Number(r).toFixed(0).padStart(4,' ')).join(' '):'—';
   const qual=msg.quality||'?',qc=qual==='excellent'?'excellent':qual==='good'?'good':qual==='fair'?'fair':'oob';
   const color=COLORS[tid%COLORS.length],row=document.createElement('div');row.className='rlog-row';
-  row.innerHTML=`<span class="rlog-time">${timeStr.slice(0,12)}</span><span class="rlog-tag" style="color:${color}">T${tid}</span><span class="rlog-xy">${msg.x!=null?msg.x.toFixed(3).padStart(6,' '):'   —'},${msg.y!=null?msg.y.toFixed(3).padStart(6,' '):'   —'}m</span><span class="rlog-ranges">[ ${ranges} ]m  ${msg.speed!=null?msg.speed.toFixed(1):'—'}km/h</span><span class="rlog-qual ${qc}">${qual}</span>`;
+  row.innerHTML=`<span class="rlog-time">${timeStr.slice(0,12)}</span><span class="rlog-tag" style="color:${color}">T${tid}</span><span class="rlog-xy">${msg.x!=null?msg.x.toFixed(1).padStart(6,' '):'   —'},${msg.y!=null?msg.y.toFixed(1).padStart(6,' '):'   —'}cm</span><span class="rlog-ranges">[ ${ranges} ]cm  ${msg.speed!=null?msg.speed.toFixed(1):'—'}km/h</span><span class="rlog-qual ${qc}">${qual}</span>`;
   const header=log.firstChild;log.insertBefore(row,header?header.nextSibling:null);
   while(log.children.length>RAW_MAX_ROWS+1)log.removeChild(log.lastChild);
 }
