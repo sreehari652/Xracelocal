@@ -3,38 +3,25 @@
 ws_bridge.py  —  UWB Full Racing System  (Dynamic Track + Dynamic Penalties)
 =============================================================================
 
-CHANGES IN THIS VERSION
-─────────────────────────
-1. Track loaded dynamically from CSV sent in admin_start payload (track_csv field)
-   CSV format:
-     CENTER,       x, y
-     INNER,        x, y
-     OUTER,        x, y
-     START_FINISH, x1, y1, x2, y2  [, direction]
-     CHECKPOINT,   id, x, y, radius [, label]
+UDP packet format from anchor ESP32:
+  "A0,AT+RANGE=tid:0,mask:0F,seq:122,range:(354,636,1157,1134,0,0,0,0),ancid:(0,1,2,3,-1,-1,-1,-1)"
 
-2. Collision penalties are fully dynamic from tournament model fields:
-     object_collision_time         → WALL_HIT_PENALTY
-         car hits wall → attacker lap time +
-     collision_creating_time       → CAR_COLLISION_ATTACKER_PENALTY
-         tag A crashes tag B → A lap time +
-     collision_absorbing_time      → CAR_COLLISION_VICTIM_BONUS
-         tag B gets hit by A → B lap time -
+  • prefix  A{anchor_id}  (ignored — ancid field in payload is used instead)
+  • tid     tag index (0-based)
+  • range   8 values, first 4 used, in cm
+  • ancid   which anchor each slot corresponds to (-1 = unused)
 
-3. No position filters (no Kalman, no OOB clamp, no RSSI weighting)
-
-4. [FIX] Lap data now correctly saved to backend via record-lap API
-5. [NEW] Per-car checkpoint progress tracked and broadcast
-6. [NEW] Checkpoint touch history (which cars touched each CP) tracked
+All positions and distances are in METRES internally.
+Track CSV coordinates must also be in metres.
 """
 
 import asyncio, websockets, socket, json, math, time, threading, signal, sys
-import urllib.request, urllib.error
+import urllib.request, urllib.error, re
 from datetime import datetime
 from collections import defaultdict, deque
 
 # ═══════════════════════════════════════════════════════════════════════
-# CONFIGURATION
+# NETWORK CONFIGURATION  ← edit here
 # ═══════════════════════════════════════════════════════════════════════
 UDP_PORT = 4210
 WS_PORT  = 8001
@@ -42,61 +29,64 @@ WS_PORT  = 8001
 DJANGO_API_BASE = 'https://xraceapi.zyberspace.in'
 LAP_API_URL     = f'{DJANGO_API_BASE}/api/record-lap/'
 
+# ── Anchor physical positions in METRES ──────────────────────────────
+#   A0 = origin (0,0)          A1 = (6.10, 0)
+#   A2 = (6.10, 4.40)          A3 = (0, 4.40)
 ANCHOR_POSITIONS = {
-    0: (0,    0),
-    1: (610,  0),
-    2: (610,  440),
-    3: (0,    440),
+    0: (0.00, 0.00),
+    1: (6.10, 0.00),
+    2: (6.10, 4.40),
+    3: (0.00, 4.40),
 }
 
 ANCHOR_COUNT = 4
 TAG_COUNT    = 6
 
-MIN_RANGE_CM = 10
-MAX_RANGE_CM = 1450
+# Range validity limits in METRES
+MIN_RANGE_M = 0.10
+MAX_RANGE_M = 14.50
 
 # ── Default race / penalty values (overridden by admin_start payload) ──
 TOTAL_LAPS_DEFAULT                     = 10
 TOTAL_LAPS                             = TOTAL_LAPS_DEFAULT
 MIN_LAPS_TO_QUALIFY                    = 3
-MIN_LAP_TIME                           = 3.0
+MIN_LAP_TIME                           = 3.0   # seconds
 
-WALL_HIT_PENALTY_DEFAULT               = 5.0    # object_collision_time
-CAR_COLLISION_ATTACKER_PENALTY_DEFAULT = 5.0    # collision_creating_time
-CAR_COLLISION_VICTIM_BONUS_DEFAULT     = 2.0    # collision_absorbing_time
+WALL_HIT_PENALTY_DEFAULT               = 5.0
+CAR_COLLISION_ATTACKER_PENALTY_DEFAULT = 5.0
+CAR_COLLISION_VICTIM_BONUS_DEFAULT     = 2.0
 
 WALL_HIT_PENALTY               = WALL_HIT_PENALTY_DEFAULT
 CAR_COLLISION_ATTACKER_PENALTY = CAR_COLLISION_ATTACKER_PENALTY_DEFAULT
 CAR_COLLISION_VICTIM_BONUS     = CAR_COLLISION_VICTIM_BONUS_DEFAULT
 
-# ── Default start/finish (overridden by CSV) ──
-START_LINE_X         = 490
-START_LINE_Y1        = 300
-START_LINE_Y2        = 340
-LINE_CROSS_TOLERANCE = 8
-LINE_Y_TOLERANCE     = 30
+# ── Default start/finish in METRES (overridden by CSV) ────────────────
+START_LINE_X         = 4.90
+START_LINE_Y1        = 3.00
+START_LINE_Y2        = 3.40
+LINE_CROSS_TOLERANCE = 0.08   # metres
+LINE_Y_TOLERANCE     = 0.30   # metres
 SF_CROSSING_DIR      = 'left_to_right'
 
-# ── Default checkpoints (overridden by CSV) ──
+# ── Default checkpoints in METRES (overridden by CSV) ─────────────────
 CHECKPOINTS = [
-    (390, 320, 22), (290, 325, 22), (190, 310, 22),
-    ( 80, 290, 22), ( 55, 240, 22), ( 80, 185, 22),
-    (160, 140, 22), (280, 100, 22), (420, 110, 22),
-    (530, 165, 22), (555, 235, 22), (530, 295, 22),
+    (3.90, 3.20, 0.22), (2.90, 3.25, 0.22), (1.90, 3.10, 0.22),
+    (0.80, 2.90, 0.22), (0.55, 2.40, 0.22), (0.80, 1.85, 0.22),
+    (1.60, 1.40, 0.22), (2.80, 1.00, 0.22), (4.20, 1.10, 0.22),
+    (5.30, 1.65, 0.22), (5.55, 2.35, 0.22), (5.30, 2.95, 0.22),
 ]
 
 tag_to_gp:        dict       = {}
 current_group_id: int | None = None
 
-CORNER_CUT_PENALTY      = 3.0
-CORNER_CUT_VOID_LAP     = False
-CAR_COLLISION_DISTANCE_CM  = 25
+CORNER_CUT_PENALTY         = 3.0
+CORNER_CUT_VOID_LAP        = False
+CAR_COLLISION_DISTANCE_M   = 0.25   # metres
 CAR_COLLISION_COOLDOWN     = 1.0
-SPEED_DIFF_THRESHOLD       = 10.0
-WALL_TOLERANCE_CM          = 5.0
+SPEED_DIFF_THRESHOLD       = 0.10   # m/s
+WALL_TOLERANCE_M           = 0.05   # metres
 WALL_COLLISION_COOLDOWN    = 0.5
-MAX_PLAUSIBLE_SPEED_CM_S   = 2800
-SPEED_AVERAGE_SAMPLES      = 2   # only last 2 points — no rolling average, pure raw delta
+MAX_PLAUSIBLE_SPEED_M_S    = 28.0   # m/s  (~100 km/h)
 SPEED_DISPLAY_UNIT         = 'km/h'
 
 PRINT_LAP_EVENTS       = True
@@ -107,21 +97,55 @@ PRINT_ANOMALIES        = True
 TRAIL_LENGTH = 30
 TAG_TIMEOUT  = 5
 
-# ── [NEW] Checkpoint touch history: cp_id → set of car_names that touched it ──
-checkpoint_touch_history: dict = {}   # {cp_id: [{"car_id": .., "car_name": .., "lap": .., "time": ..}, ...]}
+# ── Checkpoint touch history: cp_id → list of touch records ───────────
+checkpoint_touch_history: dict = {}
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# TRACK CSV PARSER
+# UDP PACKET PARSER  — AT+RANGE string format
+# ═══════════════════════════════════════════════════════════════════════
+
+# Pre-compiled regex for AT+RANGE line
+_RE_RANGE = re.compile(
+    r'tid:(\d+).*?range:\(([^)]+)\).*?ancid:\(([^)]+)\)',
+    re.IGNORECASE
+)
+
+def parse_at_range(raw_bytes: bytes):
+    """
+    Parse anchor UDP packet:
+      b"A0,AT+RANGE=tid:0,mask:0F,seq:122,range:(354,636,1157,1134,0,0,0,0),ancid:(0,1,2,3,-1,-1,-1,-1)"
+
+    Returns (tag_id: int, ranges_m: list[float], ancid: list[int])
+    or raises ValueError on parse failure.
+
+    Ranges from hardware are in cm → converted to metres here.
+    """
+    text = raw_bytes.decode('utf-8', errors='ignore').strip()
+    m = _RE_RANGE.search(text)
+    if not m:
+        raise ValueError(f"No AT+RANGE pattern in: {text!r}")
+
+    tag_id    = int(m.group(1))
+    range_raw = [float(x.strip()) for x in m.group(2).split(',')]
+    ancid_raw = [int(x.strip())   for x in m.group(3).split(',')]
+
+    # Hardware reports ranges in cm → convert to metres
+    ranges_m = [r / 100.0 for r in range_raw]
+
+    return tag_id, ranges_m, ancid_raw
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# TRACK CSV PARSER  (coordinates in METRES)
 # ═══════════════════════════════════════════════════════════════════════
 
 class TrackData:
-    """Holds geometry loaded from the tournament's track_layout_csv."""
     def __init__(self):
         self.center:      list = []
         self.inner:       list = []
         self.outer:       list = []
-        self.checkpoints: list = []   # [(x, y, radius), ...] ordered by id
+        self.checkpoints: list = []
         self.sf_x:   float = START_LINE_X
         self.sf_y1:  float = START_LINE_Y1
         self.sf_y2:  float = START_LINE_Y2
@@ -186,7 +210,6 @@ def parse_track_csv(csv_text: str) -> TrackData:
 
 
 def apply_track_data(td: TrackData):
-    """Push parsed CSV data into global lap-engine constants."""
     global CHECKPOINTS, START_LINE_X, START_LINE_Y1, START_LINE_Y2, SF_CROSSING_DIR
 
     if td.checkpoints:
@@ -199,7 +222,7 @@ def apply_track_data(td: TrackData):
     START_LINE_Y1   = td.sf_y1
     START_LINE_Y2   = td.sf_y2
     SF_CROSSING_DIR = td.sf_dir
-    print(f"[TRACK] S/F  x={START_LINE_X}  y=[{START_LINE_Y1}..{START_LINE_Y2}]  dir={SF_CROSSING_DIR}")
+    print(f"[TRACK] S/F  x={START_LINE_X:.3f}m  y=[{START_LINE_Y1:.3f}..{START_LINE_Y2:.3f}]m  dir={SF_CROSSING_DIR}")
 
     for eng in race_mgr._engines.values():
         eng.reset()
@@ -225,7 +248,7 @@ def reorder_by_ancid(slot_ranges, ancid, n=ANCHOR_COUNT):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# DYNAMIC CONFIG  (collision penalties from tournament model)
+# DYNAMIC CONFIG
 # ═══════════════════════════════════════════════════════════════════════
 
 def apply_race_config(cfg: dict, new_laps):
@@ -243,9 +266,9 @@ def apply_race_config(cfg: dict, new_laps):
     CAR_COLLISION_VICTIM_BONUS = float(v) if v and float(v) > 0 else CAR_COLLISION_VICTIM_BONUS_DEFAULT
 
     print(f"[CONFIG] laps={TOTAL_LAPS}  "
-          f"wall(object_collision)={WALL_HIT_PENALTY}s  "
-          f"attacker(creating)={CAR_COLLISION_ATTACKER_PENALTY}s  "
-          f"victim_bonus(absorbing)={CAR_COLLISION_VICTIM_BONUS}s")
+          f"wall={WALL_HIT_PENALTY}s  "
+          f"attacker={CAR_COLLISION_ATTACKER_PENALTY}s  "
+          f"victim_bonus={CAR_COLLISION_VICTIM_BONUS}s")
 
 
 def reset_race_config():
@@ -257,14 +280,10 @@ def reset_race_config():
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# API POSTER  — [FIX] ensure tag_to_gp lookup is robust
+# API POSTER
 # ═══════════════════════════════════════════════════════════════════════
 
 def post_lap_to_api(tag_id: int, lap):
-    """
-    POST lap data to Django /api/record-lap/
-    FIX: tag_to_gp keys are stored as int; also try str fallback.
-    """
     gp = tag_to_gp.get(int(tag_id)) or tag_to_gp.get(str(tag_id))
     if not gp:
         print(f"[API] SKIP tag={tag_id} — not in tag_to_gp map ({tag_to_gp})")
@@ -305,7 +324,7 @@ def post_lap_to_api(tag_id: int, lap):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# POSITIONING  (raw trilateration — no filters)
+# POSITIONING  (trilateration — all distances in metres)
 # ═══════════════════════════════════════════════════════════════════════
 
 class Positioning:
@@ -313,8 +332,10 @@ class Positioning:
     def valid_anchors(ranges, ap):
         out = []
         for i, r in enumerate(ranges):
-            if r <= 0 or i not in ap: continue
-            if r < MIN_RANGE_CM or r > MAX_RANGE_CM: continue
+            if r <= 0 or i not in ap:
+                continue
+            if r < MIN_RANGE_M or r > MAX_RANGE_M:
+                continue
             out.append({'id': i, 'range': r, 'x': ap[i][0], 'y': ap[i][1]})
         return out
 
@@ -328,7 +349,7 @@ class Positioning:
         D=2*(x3-x2); E=2*(y3-y2)
         F=r2**2-r3**2-x2**2+x3**2-y2**2+y3**2
         den = A*E - B*D
-        if abs(den) < 0.001:
+        if abs(den) < 0.0001:
             d = math.hypot(x2-x1, y2-y1)
             ratio = r1/(r1+r2) if (r1+r2) > 0 else 0.5
             return x1+(x2-x1)*ratio, y1+(y2-y1)*ratio
@@ -336,33 +357,40 @@ class Positioning:
 
     @staticmethod
     def multilat(va):
-        if len(va) < 3: return None
+        if len(va) < 3:
+            return None
         combos = []
         for i in range(len(va)):
             for j in range(i+1, len(va)):
                 for k in range(j+1, len(va)):
                     px, py = Positioning.tri3(va[i], va[j], va[k])
                     combos.append((px, py))
-        if not combos: return None
+        if not combos:
+            return None
         return sum(c[0] for c in combos)/len(combos), sum(c[1] for c in combos)/len(combos)
 
     @staticmethod
     def calculate(ranges, ap):
         va = Positioning.valid_anchors(ranges, ap)
         nv = len(va)
-        if nv >= 4:   pos = Positioning.multilat(va); q = 'excellent'
-        elif nv == 3: pos = Positioning.tri3(*va[:3]); q = 'good'
+        if nv >= 4:
+            pos = Positioning.multilat(va); q = 'excellent'
+        elif nv == 3:
+            pos = Positioning.tri3(*va[:3]); q = 'good'
         elif nv == 2:
             a1, a2 = va[0], va[1]
             ratio = a1['range']/(a1['range']+a2['range']) if (a1['range']+a2['range']) > 0 else 0.5
-            pos = (a1['x']+(a2['x']-a1['x'])*ratio, a1['y']+(a2['y']-a1['y'])*ratio); q = 'fair'
-        else: return None, 'poor', nv
-        if pos is None: return None, q, nv
+            pos = (a1['x']+(a2['x']-a1['x'])*ratio, a1['y']+(a2['y']-a1['y'])*ratio)
+            q = 'fair'
+        else:
+            return None, 'poor', nv
+        if pos is None:
+            return None, q, nv
         return (pos[0], pos[1]), q, nv
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# TAG STATE
+# TAG STATE  (positions in metres, speed in m/s internally)
 # ═══════════════════════════════════════════════════════════════════════
 
 class TagState:
@@ -373,21 +401,18 @@ class TagState:
         self.quality = 'unknown'; self.anchor_count = 0
         self.history = deque(maxlen=TRAIL_LENGTH)
         self.update_count = 0
-        # Raw speed from last two packets only — no rolling average, no smoothing
         self._prev_x = self._prev_y = self._prev_t = None
-        self.speed_cms = self.max_speed = 0.0
+        self.speed_ms = self.max_speed_ms = 0.0   # m/s
         self.pkt_total = self.pkt_accepted = self.pkt_rejected = 0
-        self.last_ranges = [0]*ANCHOR_COUNT
+        self.last_ranges = [0.0]*ANCHOR_COUNT
 
     def update_position(self, rx, ry, quality, anc, now):
-        # Speed = raw distance delta / time delta, no filtering
         if self._prev_t is not None:
             dt = now - self._prev_t
             if dt > 0:
-                self.speed_cms = math.hypot(rx - self._prev_x, ry - self._prev_y) / dt
-                self.max_speed = max(self.max_speed, self.speed_cms)
+                self.speed_ms = math.hypot(rx - self._prev_x, ry - self._prev_y) / dt
+                self.max_speed_ms = max(self.max_speed_ms, self.speed_ms)
         self._prev_x, self._prev_y, self._prev_t = rx, ry, now
-        # Store raw trilateration result exactly as-is
         self.x, self.y = rx, ry
         self.quality = quality; self.anchor_count = anc
         self.status = True; self.last_update = now
@@ -395,18 +420,23 @@ class TagState:
         self.update_count += 1; self.pkt_accepted += 1
 
     def speed_display(self):
-        if SPEED_DISPLAY_UNIT == 'km/h': return self.speed_cms * 0.036
-        if SPEED_DISPLAY_UNIT == 'm/s':  return self.speed_cms / 100
-        return self.speed_cms
+        """Return speed in selected display unit."""
+        if SPEED_DISPLAY_UNIT == 'km/h':
+            return self.speed_ms * 3.6
+        if SPEED_DISPLAY_UNIT == 'm/s':
+            return self.speed_ms
+        return self.speed_ms * 100  # cm/s fallback
 
-    def is_active(self): return self.status and (time.time() - self.last_update) < TAG_TIMEOUT
+    def is_active(self):
+        return self.status and (time.time() - self.last_update) < TAG_TIMEOUT
 
     def reset(self):
         self.history.clear()
         self._prev_x = self._prev_y = self._prev_t = None
-        self.speed_cms = self.max_speed = 0.0; self.status = False
+        self.speed_ms = self.max_speed_ms = 0.0
+        self.status = False
         self.update_count = self.pkt_total = self.pkt_accepted = self.pkt_rejected = 0
-        self.last_ranges = [0]*ANCHOR_COUNT
+        self.last_ranges = [0.0]*ANCHOR_COUNT
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -423,22 +453,24 @@ class LapScore:
     def add_wall_hit(self):
         self._pen += WALL_HIT_PENALTY; self.wall_hits += 1
         if PRINT_WALL_EVENTS:
-            print(f"  🚧 WALL  | {self.car_name} Lap {self.lap_number}  +{WALL_HIT_PENALTY}s  (object_collision)")
+            print(f"  🚧 WALL  | {self.car_name} Lap {self.lap_number}  +{WALL_HIT_PENALTY}s")
 
     def add_attacker_penalty(self):
         self._pen += CAR_COLLISION_ATTACKER_PENALTY; self.atk_hits += 1
         if PRINT_COLLISION_EVENTS:
-            print(f"  🔴 ATK   | {self.car_name} Lap {self.lap_number}  +{CAR_COLLISION_ATTACKER_PENALTY}s  (collision_creating)")
+            print(f"  🔴 ATK   | {self.car_name} Lap {self.lap_number}  +{CAR_COLLISION_ATTACKER_PENALTY}s")
 
     def add_victim_bonus(self):
         self._bon += CAR_COLLISION_VICTIM_BONUS; self.vic_hits += 1
         if PRINT_COLLISION_EVENTS:
-            print(f"  🟢 VIC   | {self.car_name} Lap {self.lap_number}  -{CAR_COLLISION_VICTIM_BONUS}s  (collision_absorbing)")
+            print(f"  🟢 VIC   | {self.car_name} Lap {self.lap_number}  -{CAR_COLLISION_VICTIM_BONUS}s")
 
     def add_corner_cut(self):
         self.corner_cuts += 1
-        if CORNER_CUT_VOID_LAP: self.voided = True
-        else: self._pen += CORNER_CUT_PENALTY
+        if CORNER_CUT_VOID_LAP:
+            self.voided = True
+        else:
+            self._pen += CORNER_CUT_PENALTY
 
     @property
     def elp(self):
@@ -464,7 +496,6 @@ class ScoringEngine:
         msg = f"📊 LAP | {lap.car_name} Lap {lap.lap_number} raw={raw:.2f}s ELP={lap.elp:.2f}s"
         if PRINT_LAP_EVENTS: print(msg)
         self._feed.append(msg)
-        # [FIX] Always attempt to post to API — robust lookup in post_lap_to_api
         post_lap_to_api(cid, lap)
         return lap
 
@@ -500,7 +531,8 @@ class ScoringEngine:
                              qualifies=self.qualifies(cid),
                              penalty_total=round(sum(l._pen for l in laps), 2),
                              bonus_total=round(sum(l._bon for l in laps), 2)))
-        rows.sort(key=lambda r: (r['best_elp'], r['best_lap'])); return rows
+        rows.sort(key=lambda r: (r['best_elp'], r['best_lap']))
+        return rows
 
     def get_car_summary(self, cid):
         laps = self._history.get(cid, []); op = self._open.get(cid)
@@ -513,27 +545,31 @@ class ScoringEngine:
     def get_feed(self, n=8): return self._feed[-n:]
 
     def reset(self):
-        self._history.clear(); self._open.clear(); self._feed.clear(); print("📊 Scoring reset")
+        self._history.clear(); self._open.clear(); self._feed.clear()
+        print("📊 Scoring reset")
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# TRACK / COLLISION GEOMETRY
+# TRACK / COLLISION GEOMETRY  (metres)
 # ═══════════════════════════════════════════════════════════════════════
 
 class Track:
     def __init__(self, outer, inner=None):
         self.outer = outer; self.inner = inner or []
+
     def has_width(self): return len(self.inner) > 0
     def get_outer_points(self): return self.outer
     def get_inner_points(self): return self.inner
 
 
 def create_track_from_data(td: TrackData) -> Track:
-    if td.inner and td.outer: return Track(td.outer, td.inner)
+    if td.inner and td.outer:
+        return Track(td.outer, td.inner)
     return create_oval_track()
 
 
-def create_oval_track(cx=305, cy=220, ow=260, oh=190, tw=30, n=40):
+def create_oval_track(cx=3.05, cy=2.20, ow=2.60, oh=1.90, tw=0.30, n=40):
+    """Default oval track in metres."""
     o, i = [], []
     for k in range(n):
         a = 2*math.pi*k/n
@@ -543,12 +579,14 @@ def create_oval_track(cx=305, cy=220, ow=260, oh=190, tw=30, n=40):
 
 
 def dist_to_boundary(px, py, pts):
-    if not pts or len(pts) < 2: return float('inf')
+    if not pts or len(pts) < 2:
+        return float('inf')
     best = float('inf'); n = len(pts)
     for i in range(n):
         x1, y1 = pts[i]; x2, y2 = pts[(i+1)%n]
         dx, dy = x2-x1, y2-y1; den = dx*dx + dy*dy
-        if den == 0: d = math.hypot(px-x1, py-y1)
+        if den == 0:
+            d = math.hypot(px-x1, py-y1)
         else:
             t = max(0, min(1, ((px-x1)*dx + (py-y1)*dy) / den))
             d = math.hypot(px-x1-t*dx, py-y1-t*dy)
@@ -557,7 +595,7 @@ def dist_to_boundary(px, py, pts):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# LAP ENGINE  — [NEW] track per-car CP hits + broadcast CP touch history
+# LAP ENGINE  (all geometry in metres)
 # ═══════════════════════════════════════════════════════════════════════
 
 class LapEngine:
@@ -567,7 +605,6 @@ class LapEngine:
         self.is_racing = False; self.race_finished = False; self.admin_armed = False
         self._lap_start = None; self._last_cross = 0.0; self._lap_times = []
         self._next_cp = 0; self._sf_side = None
-        # [NEW] per-car: list of cp indices hit in current lap
         self.current_lap_cp_hits: list = []
 
     def arm(self):
@@ -588,19 +625,22 @@ class LapEngine:
         elif x > START_LINE_X + tol: new_side = 'right'
         else: return None
 
-        if self._sf_side is None: self._sf_side = new_side; return None
+        if self._sf_side is None:
+            self._sf_side = new_side; return None
 
         prev_side = self._sf_side; self._sf_side = new_side
-        crossing  = ((prev_side=='right' and new_side=='left')  if SF_CROSSING_DIR=='right_to_left'
-                     else (prev_side=='left' and new_side=='right'))
+        crossing = ((prev_side=='right' and new_side=='left')  if SF_CROSSING_DIR=='right_to_left'
+                    else (prev_side=='left' and new_side=='right'))
 
         if not crossing: return None
         if not self._on_line(y):
-            print(f"[SF] {self.car_name} crossed but y={y:.0f} outside Y range — ignored"); return None
+            print(f"[SF] {self.car_name} crossed but y={y:.3f}m outside Y range — ignored")
+            return None
         if now - self._last_cross < MIN_LAP_TIME:
-            print(f"[SF] {self.car_name} debounce — ignored"); return None
+            print(f"[SF] {self.car_name} debounce — ignored")
+            return None
 
-        print(f"[SF] ✓ {self.car_name} ({prev_side}→{new_side}) x={x:.0f} y={y:.0f}")
+        print(f"[SF] ✓ {self.car_name} ({prev_side}→{new_side}) x={x:.3f}m y={y:.3f}m")
         self._last_cross = now
         return self._process_crossing(now)
 
@@ -630,28 +670,28 @@ class LapEngine:
 
         if self.laps_done >= TOTAL_LAPS:
             self.is_racing = False; self.race_finished = True
-            if PRINT_LAP_EVENTS: print(f"🏆 FINISH | {self.car_name} ({self.laps_done} laps)")
-            ev['type'] = 'race_finish'; return ev
+            if PRINT_LAP_EVENTS:
+                print(f"🏆 FINISH | {self.car_name} ({self.laps_done} laps)")
+            ev['type'] = 'race_finish'
+            return ev
 
         self.current_lap += 1; self._lap_start = now
         self.scoring.open_lap(self.car_id, self.current_lap)
         if PRINT_LAP_EVENTS:
-            print(f"🔄 LAP | {self.car_name} Lap {self.current_lap}/{TOTAL_LAPS} raw={raw:.2f}s ELP={ls.elp:.2f}s")
+            print(f"🔄 LAP | {self.car_name} Lap {self.current_lap}/{TOTAL_LAPS} "
+                  f"raw={raw:.2f}s ELP={ls.elp:.2f}s")
         return ev
 
     def _check_checkpoints(self, x, y, now):
-        """
-        [UPDATED] Check next sequential CP. Also record touch in global checkpoint_touch_history.
-        """
-        if self._next_cp >= len(CHECKPOINTS): return None
+        if self._next_cp >= len(CHECKPOINTS):
+            return None
         cx, cy, cr = CHECKPOINTS[self._next_cp]
         if math.hypot(x-cx, y-cy) <= cr:
             idx = self._next_cp
-            print(f"  ✔ CP{idx} | {self.car_name} @ ({x:.0f},{y:.0f}) [{idx+1}/{len(CHECKPOINTS)}]")
+            print(f"  ✔ CP{idx} | {self.car_name} @ ({x:.3f},{y:.3f})m [{idx+1}/{len(CHECKPOINTS)}]")
             self._next_cp += 1
             self.current_lap_cp_hits.append(idx)
 
-            # [NEW] Record in global touch history
             if idx not in checkpoint_touch_history:
                 checkpoint_touch_history[idx] = []
             checkpoint_touch_history[idx].append({
@@ -663,12 +703,14 @@ class LapEngine:
 
             return dict(type='checkpoint', car_id=self.car_id, car_name=self.car_name,
                         cp_index=idx, total=len(CHECKPOINTS),
-                        # [NEW] include who has touched this CP so far
                         cp_touches=checkpoint_touch_history.get(idx, []))
         return None
 
-    def elapsed(self, now): return (now - self._lap_start) if self._lap_start else 0.0
-    def best_raw(self): return min(self._lap_times) if self._lap_times else 0.0
+    def elapsed(self, now):
+        return (now - self._lap_start) if self._lap_start else 0.0
+
+    def best_raw(self):
+        return min(self._lap_times) if self._lap_times else 0.0
 
     def get_info(self, now=None):
         return dict(car_id=self.car_id, car_name=self.car_name,
@@ -678,7 +720,6 @@ class LapEngine:
                     current_lap_elapsed=self.elapsed(now or time.time()),
                     best_raw=self.best_raw(), lap_times=list(self._lap_times),
                     checkpoints_hit=self._next_cp, checkpoints_total=len(CHECKPOINTS),
-                    # [NEW] per-car CP hit list for current lap
                     cp_hits_this_lap=list(self.current_lap_cp_hits))
 
     def reset(self):
@@ -699,10 +740,12 @@ class RaceManager:
         self.race_active = False; self.race_start_time = self.race_end_time = None
 
     def register(self, cid, name):
-        self.scoring.register(cid, name); self._engines[cid] = LapEngine(cid, name, self.scoring)
+        self.scoring.register(cid, name)
+        self._engines[cid] = LapEngine(cid, name, self.scoring)
 
     def admin_start(self):
-        for e in self._engines.values(): e.arm()
+        for e in self._engines.values():
+            e.arm()
         print(f"🟢 RACE ARMED – {TOTAL_LAPS} laps")
 
     def update(self, cid, x, y, speed, now):
@@ -711,24 +754,30 @@ class RaceManager:
         ev = eng.update(x, y, speed, now)
         if ev:
             if ev['type'] == 'race_start' and not self.race_active:
-                self.race_active = True; self.race_start_time = now; print("🏁 RACE IN PROGRESS")
+                self.race_active = True; self.race_start_time = now
+                print("🏁 RACE IN PROGRESS")
             if ev['type'] == 'race_finish' and all(e.race_finished for e in self._engines.values()):
-                self.race_active = False; self.race_end_time = now; print("🏆 ALL FINISHED")
+                self.race_active = False; self.race_end_time = now
+                print("🏆 ALL FINISHED")
         return ev
 
     def get_info(self, cid, now=None):
-        e = self._engines.get(cid); return e.get_info(now) if e else None
+        e = self._engines.get(cid)
+        return e.get_info(now) if e else None
 
-    def get_leaderboard(self): return self.scoring.get_leaderboard()
+    def get_leaderboard(self):
+        return self.scoring.get_leaderboard()
 
     def reset(self):
-        for e in self._engines.values(): e.reset()
+        for e in self._engines.values():
+            e.reset()
         self.scoring.reset(); self.race_active = False
-        self.race_start_time = self.race_end_time = None; print("🔄 Race reset")
+        self.race_start_time = self.race_end_time = None
+        print("🔄 Race reset")
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# COLLISION ENGINE
+# COLLISION ENGINE  (distances in metres, speed in m/s)
 # ═══════════════════════════════════════════════════════════════════════
 
 class CollisionEngine:
@@ -747,9 +796,11 @@ class CollisionEngine:
         for cid, d in cars.items():
             self._pos[cid] = (d['x'], d['y'], now)
             self._speeds[cid] = d.get('speed', 0.0)
-            self._laps[cid] = d.get('lap', 0); self._racing[cid] = d.get('racing', False)
+            self._laps[cid] = d.get('lap', 0)
+            self._racing[cid] = d.get('racing', False)
             spd = self._speeds[cid]
-            if spd > MAX_PLAUSIBLE_SPEED_CM_S: self._anomaly(cid, spd, now)
+            if spd > MAX_PLAUSIBLE_SPEED_M_S:
+                self._anomaly(cid, spd, now)
 
         racing = [c for c, d in cars.items() if d.get('racing', False)]
         for i in range(len(racing)):
@@ -760,13 +811,14 @@ class CollisionEngine:
             if not d.get('racing', False): continue
             e = self._wall(cid, d['x'], d['y'], d.get('lap', 0), now)
             if e: evts.append(e)
-        self.events.extend(evts); return evts
+        self.events.extend(evts)
+        return evts
 
     def _car(self, a, b, now):
         pa = self._pos.get(a); pb = self._pos.get(b)
         if not pa or not pb: return None
         dist = math.hypot(pa[0]-pb[0], pa[1]-pb[1])
-        if dist > CAR_COLLISION_DISTANCE_CM: return None
+        if dist > CAR_COLLISION_DISTANCE_M: return None
         key = frozenset([a, b])
         if now - self._car_cd.get(key, 0) < CAR_COLLISION_COOLDOWN: return None
         self._car_cd[key] = now
@@ -776,10 +828,10 @@ class CollisionEngine:
         self.scoring.car_collision(atk, vic)
         an = self._names.get(atk, f"Car{atk}"); vn = self._names.get(vic, f"Car{vic}")
         if PRINT_COLLISION_EVENTS:
-            print(f"💥 CAR | {an}→{vn} dist={dist:.1f}cm  "
+            print(f"💥 CAR | {an}→{vn} dist={dist:.3f}m  "
                   f"atk+{CAR_COLLISION_ATTACKER_PENALTY}s / vic-{CAR_COLLISION_VICTIM_BONUS}s")
         return dict(type='car', attacker=atk, victim=vic,
-                    attacker_name=an, victim_name=vn, dist=dist,
+                    attacker_name=an, victim_name=vn, dist=round(dist, 3),
                     lap=self._laps.get(atk, 0), time=now)
 
     def _wall(self, cid, x, y, lap, now):
@@ -787,20 +839,28 @@ class CollisionEngine:
         if now - self._wall_cd.get(cid, 0) < WALL_COLLISION_COOLDOWN: return None
         od = dist_to_boundary(x, y, self.track.get_outer_points())
         id_ = dist_to_boundary(x, y, self.track.get_inner_points())
-        wall = ('outer' if od <= WALL_TOLERANCE_CM else ('inner' if id_ <= WALL_TOLERANCE_CM else None))
+        wall = ('outer' if od <= WALL_TOLERANCE_M else
+                ('inner' if id_ <= WALL_TOLERANCE_M else None))
         if not wall: return None
-        self._wall_cd[cid] = now; self.scoring.wall_hit(cid)
+        self._wall_cd[cid] = now
+        self.scoring.wall_hit(cid)
         name = self._names.get(cid, f"Car{cid}")
-        if PRINT_WALL_EVENTS: print(f"🚧 WALL | {name} {wall} Lap{lap}  +{WALL_HIT_PENALTY}s")
+        if PRINT_WALL_EVENTS:
+            print(f"🚧 WALL | {name} {wall} Lap{lap}  +{WALL_HIT_PENALTY}s")
         return dict(type='wall', car_id=cid, car_name=name, wall=wall, lap=lap, time=now)
 
     def _anomaly(self, cid, spd, now):
         n = self._names.get(cid, f"Car{cid}")
         self.anomalies.append(dict(car_id=cid, name=n, speed=spd, time=now))
-        if PRINT_ANOMALIES: print(f"⚠️ ANOMALY | {n} speed={spd:.0f}cm/s")
+        if PRINT_ANOMALIES:
+            print(f"⚠️ ANOMALY | {n} speed={spd:.2f}m/s ({spd*3.6:.1f}km/h)")
 
-    def wall_hits(self, cid): return [e for e in self.events if e['type']=='wall' and e['car_id']==cid]
-    def car_events(self, cid): return [e for e in self.events if e['type']=='car' and (e['attacker']==cid or e['victim']==cid)]
+    def wall_hits(self, cid):
+        return [e for e in self.events if e['type']=='wall' and e['car_id']==cid]
+
+    def car_events(self, cid):
+        return [e for e in self.events if e['type']=='car' and
+                (e['attacker']==cid or e['victim']==cid)]
 
     def reset(self):
         self.events.clear(); self.anomalies.clear()
@@ -838,13 +898,13 @@ def process_race_update(tid, now):
     tag = tags.get(tid)
     if not tag or not tag.is_active(): return []
     evts = []
-    ev = race_mgr.update(tid, tag.x, tag.y, tag.speed_cms, now)
+    ev = race_mgr.update(tid, tag.x, tag.y, tag.speed_ms, now)
     if ev: evts.append(ev)
     cars = {}
     for t_id, t in tags.items():
         if t.is_active():
             li = race_mgr.get_info(t_id, now)
-            cars[t_id] = dict(x=t.x, y=t.y, speed=t.speed_cms,
+            cars[t_id] = dict(x=t.x, y=t.y, speed=t.speed_ms,
                                lap=li['current_lap'] if li else 0,
                                racing=li['is_racing'] if li else False)
     if cars: evts.extend(col_eng.update(cars, now))
@@ -852,19 +912,18 @@ def process_race_update(tid, now):
 
 
 def build_state(now):
-    """
-    [UPDATED] Include cp_hits_this_lap per car and checkpoint_touch_history globally.
-    """
     cars = []
     for tid, tag in tags.items():
         if not tag.is_active(): continue
         li = race_mgr.get_info(tid, now); sc = scoring.get_car_summary(tid)
         cars.append(dict(
-            tag_id=tid, name=tag.name, x=round(tag.x,1), y=round(tag.y,1),
-            speed=round(tag.speed_display(),2), speed_unit=SPEED_DISPLAY_UNIT,
-            speed_cms=round(tag.speed_cms,1), quality=tag.quality,
-            anchor_count=tag.anchor_count, last_ranges=tag.last_ranges,
-            trail=[(round(h[0],1),round(h[1],1)) for h in tag.history],
+            tag_id=tid, name=tag.name,
+            x=round(tag.x, 4), y=round(tag.y, 4),
+            speed=round(tag.speed_display(), 2), speed_unit=SPEED_DISPLAY_UNIT,
+            speed_ms=round(tag.speed_ms, 3),
+            quality=tag.quality, anchor_count=tag.anchor_count,
+            last_ranges=tag.last_ranges,
+            trail=[(round(h[0],4), round(h[1],4)) for h in tag.history],
             lap_info=li,
             scoring=dict(best_elp=sc['best_elp'] if sc['best_elp']<float('inf') else None,
                          laps_done=sc['laps_done'], qualifies=sc['qualifies'],
@@ -882,15 +941,10 @@ def build_state(now):
         track=current_track.to_dict(),
         cars=cars, leaderboard=race_mgr.get_leaderboard(),
         feed=scoring.get_feed(10),
-        # [NEW] global CP touch history for the frontend panel
         checkpoint_touches=_serialize_cp_touches()))
 
 
 def _serialize_cp_touches() -> dict:
-    """
-    Returns {cp_id: [{"car_id":..,"car_name":..,"lap":..}, ...], ...}
-    Serialisable, no timestamps (too much data).
-    """
     result = {}
     for cp_id, touches in checkpoint_touch_history.items():
         result[str(cp_id)] = [
@@ -901,71 +955,87 @@ def _serialize_cp_touches() -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# UDP RECEIVER
+# UDP RECEIVER  — parses AT+RANGE string format
 # ═══════════════════════════════════════════════════════════════════════
 
 def udp_receiver():
     global running
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(('', UDP_PORT)); sock.settimeout(0.1)
+    sock.bind(('', UDP_PORT))
+    sock.settimeout(0.1)
     print(f"[UDP] Listening on port {UDP_PORT}")
+    print(f"[UDP] Expecting AT+RANGE packets from anchors (ranges in cm → converted to metres)")
 
     while running:
         try:
             data, addr = sock.recvfrom(2048)
             stats['udp_total'] += 1
-            try: uwb = json.loads(data.decode('utf-8', errors='ignore').strip())
-            except: stats['udp_invalid'] += 1; continue
 
-            if 'id' not in uwb or 'range' not in uwb: stats['udp_invalid'] += 1; continue
-            tid = int(uwb['id'])
-            if tid not in tags: stats['udp_invalid'] += 1; continue
-            slot_ranges = uwb['range']
-            if not isinstance(slot_ranges, list) or len(slot_ranges) < ANCHOR_COUNT:
-                stats['udp_invalid'] += 1; continue
+            # ── Parse AT+RANGE format ──────────────────────────────────
+            try:
+                tid, ranges_m, ancid = parse_at_range(data)
+            except ValueError as e:
+                stats['udp_invalid'] += 1
+                if stats['udp_total'] % 50 == 1:     # throttle noisy log
+                    print(f"[UDP] Parse fail from {addr}: {e}")
+                continue
 
-            ancid      = uwb.get('ancid', [])
-            raw_ranges = reorder_by_ancid(slot_ranges, ancid, ANCHOR_COUNT)
-            now = time.time(); tag = tags[tid]; tag.pkt_total += 1
+            if tid not in tags:
+                stats['udp_invalid'] += 1
+                continue
 
-            pos, quality, anc_count = Positioning.calculate(raw_ranges, ANCHOR_POSITIONS)
-            if pos is None: tag.pkt_rejected += 1; stats['udp_invalid'] += 1; continue
+            # Reorder by ancid so index matches ANCHOR_POSITIONS
+            raw_ranges_m = reorder_by_ancid(ranges_m, ancid, ANCHOR_COUNT)
+
+            now = time.time()
+            tag = tags[tid]; tag.pkt_total += 1
+
+            pos, quality, anc_count = Positioning.calculate(raw_ranges_m, ANCHOR_POSITIONS)
+            if pos is None:
+                tag.pkt_rejected += 1; stats['udp_invalid'] += 1
+                continue
 
             rx, ry = pos
             tag.update_position(rx, ry, quality, anc_count, now)
-            tag.last_ranges = [int(r) for r in raw_ranges]
+            tag.last_ranges = [round(r, 4) for r in raw_ranges_m]
             stats['udp_valid'] += 1; stats['tags_seen'].add(tid)
 
-            print(f"[UWB] Tag{tid}  ({rx:.0f},{ry:.0f})  "
-                  f"ranges={[int(r) for r in raw_ranges]}  {quality}  "
+            print(f"[UWB] Tag{tid}  ({rx:.3f},{ry:.3f})m  "
+                  f"ranges={[round(r,2) for r in raw_ranges_m]}m  {quality}  "
                   f"{tag.speed_display():.1f}{SPEED_DISPLAY_UNIT}")
 
             game_evts = process_race_update(tid, now)
 
             if connected_clients and event_loop:
-                li = race_mgr.get_info(tid, now); open_lap = scoring._open.get(tid)
+                li = race_mgr.get_info(tid, now)
+                open_lap = scoring._open.get(tid)
                 msg = json.dumps(dict(
                     type="tag_position", tag_id=tid,
-                    x=round(tag.x,1), y=round(tag.y,1), range=raw_ranges,
-                    speed=round(tag.speed_display(),2), speed_cms=round(tag.speed_cms,1),
-                    speed_unit=SPEED_DISPLAY_UNIT, quality=quality, anchor_count=anc_count,
+                    x=round(tag.x, 4), y=round(tag.y, 4),
+                    range=tag.last_ranges,
+                    speed=round(tag.speed_display(), 2),
+                    speed_ms=round(tag.speed_ms, 3),
+                    speed_unit=SPEED_DISPLAY_UNIT,
+                    quality=quality, anchor_count=anc_count,
                     timestamp=now, game_events=game_evts,
                     wall_hits=len(col_eng.wall_hits(tid)),
                     car_collisions=len(col_eng.car_events(tid)),
                     current_penalty=round(open_lap._pen,2) if open_lap else 0.0,
                     current_bonus=round(open_lap._bon,2) if open_lap else 0.0,
                     lap_info=li,
-                    # [NEW] send latest CP touch map on every tag_position message
                     checkpoint_touches=_serialize_cp_touches()))
                 asyncio.run_coroutine_threadsafe(broadcast(msg), event_loop)
                 if game_evts:
                     asyncio.run_coroutine_threadsafe(broadcast(build_state(now)), event_loop)
 
-        except socket.timeout: continue
+        except socket.timeout:
+            continue
         except Exception as e:
-            if running: print(f"[UDP] Error: {e}")
-    sock.close(); print("[UDP] Stopped")
+            if running:
+                print(f"[UDP] Error: {e}")
+    sock.close()
+    print("[UDP] Stopped")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -991,12 +1061,14 @@ async def handle_client(ws):
         now = time.time()
         await ws.send(json.dumps(dict(
             type="connection", status="connected",
-            message="UWB Racing — Dynamic Track + Penalties",
+            message="UWB Racing — AT+RANGE format, metres",
             timestamp=now,
-            server_info=dict(udp_port=UDP_PORT, ws_port=WS_PORT,
-                             anchor_count=ANCHOR_COUNT, tag_count=TAG_COUNT,
-                             total_laps=TOTAL_LAPS,
-                             uptime_seconds=(datetime.now()-stats['start']).total_seconds()),
+            server_info=dict(
+                udp_port=UDP_PORT, ws_port=WS_PORT,
+                anchor_count=ANCHOR_COUNT, tag_count=TAG_COUNT,
+                total_laps=TOTAL_LAPS,
+                units='metres',
+                uptime_seconds=(datetime.now()-stats['start']).total_seconds()),
             anchors={str(k):{"x":v[0],"y":v[1]} for k,v in ANCHOR_POSITIONS.items()},
             track=current_track.to_dict(),
             stats=dict(packets_received=stats['udp_valid'],
@@ -1015,7 +1087,6 @@ async def handle_client(ws):
 
                     nm = d.get('tag_map', {})
                     if nm:
-                        # [FIX] store both int and str keys for robust lookup
                         tag_to_gp = {}
                         for k, v in nm.items():
                             tag_to_gp[int(k)] = int(v)
@@ -1034,14 +1105,13 @@ async def handle_client(ws):
                             print(f"[TRACK] ✓ center={len(td.center)} inner={len(td.inner)} "
                                   f"outer={len(td.outer)} cp={len(td.checkpoints)}")
                         else:
-                            print("[TRACK] CSV parsed but no CENTER points — using current defaults")
+                            print("[TRACK] CSV parsed but no CENTER points — using defaults")
                     else:
                         print("[TRACK] No track_csv — using current/default track")
 
-                    # Reset CP touch history on new race
                     checkpoint_touch_history.clear()
-
                     race_mgr.reset(); race_mgr.admin_start(); race_armed = True
+
                     await broadcast(json.dumps(dict(
                         type="admin_event", event="race_armed",
                         message=f"Race armed – {TOTAL_LAPS} laps",
@@ -1091,11 +1161,15 @@ async def handle_client(ws):
                 else:
                     print(f"[WS] Unknown cmd '{mt}' from {cid}")
 
-            except json.JSONDecodeError: print(f"[WS] Bad JSON from {cid}")
-            except Exception as e: print(f"[WS] Handler error: {e}")
+            except json.JSONDecodeError:
+                print(f"[WS] Bad JSON from {cid}")
+            except Exception as e:
+                print(f"[WS] Handler error: {e}")
 
-    except websockets.exceptions.ConnectionClosed: pass
-    except Exception as e: print(f"[WS] Client error: {e}")
+    except websockets.exceptions.ConnectionClosed:
+        pass
+    except Exception as e:
+        print(f"[WS] Client error: {e}")
     finally:
         connected_clients.discard(ws)
         print(f"[WS] Disconnected: {cid} | active={len(connected_clients)}")
@@ -1107,10 +1181,12 @@ async def stats_reporter():
         if not running: break
         up = (datetime.now()-stats['start']).total_seconds()
         tot = stats['udp_total']; val = stats['udp_valid']
-        print(f"\n{'═'*60}\nSTATS  uptime={up:.0f}s  UDP {val}/{tot} ({val/tot*100 if tot else 0:.0f}%)")
+        print(f"\n{'═'*60}\nSTATS  uptime={up:.0f}s  "
+              f"UDP {val}/{tot} ({val/tot*100 if tot else 0:.0f}%)")
         for tid, t in tags.items():
             if t.pkt_total > 0:
-                print(f"  Tag{tid}: {t.pkt_accepted}/{t.pkt_total} ({t.pkt_accepted/t.pkt_total*100:.0f}%)")
+                print(f"  Tag{tid}: {t.pkt_accepted}/{t.pkt_total} "
+                      f"({t.pkt_accepted/t.pkt_total*100:.0f}%)")
         for i, r in enumerate(race_mgr.get_leaderboard()):
             elp = f"{r['best_elp']:.2f}s" if r['best_elp'] < float('inf') else "—"
             print(f"  {i+1}. {r['car_name']:<8} ELP={elp} Laps={r['laps_done']}")
@@ -1120,12 +1196,20 @@ async def stats_reporter():
 async def main():
     global event_loop, running
     event_loop = asyncio.get_event_loop()
+
+    # Compute anchor bounding box for display
+    ax = [v[0] for v in ANCHOR_POSITIONS.values()]
+    ay = [v[1] for v in ANCHOR_POSITIONS.values()]
+
     print(f"\n{'═'*60}")
-    print(f"  UWB RACING — Dynamic Track + Dynamic Penalties")
+    print(f"  UWB RACING — AT+RANGE parser  |  all units: METRES")
     print(f"  UDP={UDP_PORT}  WS={WS_PORT}")
-    print(f"  Track: loaded from tournament.track.track_layout_csv via admin_start")
-    print(f"  Penalties: from tournament model collision fields")
+    print(f"  Anchors: {dict(ANCHOR_POSITIONS)}")
+    print(f"  Field: {max(ax)-min(ax):.2f}m × {max(ay)-min(ay):.2f}m")
+    print(f"  UDP format: A{{id}},AT+RANGE=tid:N,...,range:(...),ancid:(...)")
+    print(f"  Ranges: cm from hardware → metres internally")
     print(f"{'═'*60}\n")
+
     threading.Thread(target=udp_receiver, daemon=True, name="UDP").start()
     asyncio.create_task(stats_reporter())
     try:
@@ -1145,13 +1229,16 @@ def signal_handler(sig, frame):
     for i, r in enumerate(race_mgr.get_leaderboard()):
         elp = f"{r['best_elp']:.2f}s" if r['best_elp'] < float('inf') else "—"
         print(f"  {i+1}. {r['car_name']}  ELP={elp}  Laps={r['laps_done']}")
-    print(f"{'═'*60}\n"); sys.exit(0)
+    print(f"{'═'*60}\n")
+    sys.exit(0)
 
 
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, signal_handler)
-    try: asyncio.run(main())
-    except KeyboardInterrupt: signal_handler(None, None)
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        signal_handler(None, None)
     except Exception as e:
         print(f"\n✗ FATAL: {e}")
         import traceback; traceback.print_exc()

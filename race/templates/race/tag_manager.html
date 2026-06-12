@@ -61,13 +61,12 @@ body{background:var(--bg);color:var(--text);font-family:'Rajdhani',sans-serif;fo
 .rlog-row{display:flex;gap:8px;padding:1px 12px;font-size:.6rem;border-bottom:1px solid rgba(255,255,255,.03);white-space:nowrap;overflow:hidden;align-items:baseline;}
 .rlog-row:hover{background:rgba(255,255,255,.03)}
 .rlog-time{color:#4a5568;width:52px;flex-shrink:0;} .rlog-tag{font-weight:700;width:38px;flex-shrink:0;}
-.rlog-xy{color:#00ff88;width:110px;flex-shrink:0;} .rlog-ranges{color:#00d4ff;flex:1;}
+.rlog-xy{color:#00ff88;width:120px;flex-shrink:0;} .rlog-ranges{color:#00d4ff;flex:1;}
 .rlog-qual{width:52px;flex-shrink:0;text-align:right;}
 .rlog-qual.excellent{color:#00ff88} .rlog-qual.good{color:#ffd700} .rlog-qual.fair{color:#ff6b35} .rlog-qual.oob{color:#ff3b5c}
 .main{display:flex;flex:1;overflow:hidden}
 .cv-wrap{flex:1;display:flex;align-items:center;justify-content:center;padding:10px;min-width:0}
 canvas{border-radius:8px;border:1px solid var(--border);background:var(--bg);max-width:100%;max-height:100%}
-/* SIDEBAR */
 .side{width:315px;background:var(--surface);border-left:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;flex-shrink:0}
 .side-hdr{padding:10px 12px;border-bottom:1px solid var(--border);flex-shrink:0}
 .side-lbl{font-size:.68rem;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-bottom:7px}
@@ -122,8 +121,6 @@ canvas{border-radius:8px;border:1px solid var(--border);background:var(--bg);max
 .feed-wrap::-webkit-scrollbar{width:3px} .feed-wrap::-webkit-scrollbar-thumb{background:var(--border)}
 .feed-item{font-family:'JetBrains Mono',monospace;font-size:.62rem;color:var(--muted);padding:2px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-bottom:1px solid rgba(255,255,255,.03)}
 .feed-item.hi{color:var(--accent)}
-
-/* ── [NEW] CP Panel ─────────────────────────────────────── */
 #cpPanel{flex-shrink:0;border-top:1px solid var(--border);padding:8px 12px 10px;max-height:180px;overflow-y:auto;}
 #cpPanel::-webkit-scrollbar{width:4px} #cpPanel::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
 .cp-row{display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.04);}
@@ -133,7 +130,6 @@ canvas{border-radius:8px;border:1px solid var(--border);background:var(--bg);max
 .cp-cars{display:flex;flex-wrap:wrap;gap:3px;flex:1;}
 .cp-car-chip{display:inline-flex;align-items:center;gap:3px;padding:1px 6px;border-radius:8px;font-size:.56rem;font-weight:700;font-family:'JetBrains Mono',monospace;border:1px solid;}
 .cp-empty{font-size:.6rem;color:rgba(255,255,255,.15);font-family:'JetBrains Mono',monospace;}
-
 @media(max-width:768px){.main{flex-direction:column}.cv-wrap{max-height:45vh;padding:6px}.side{width:100%;border-left:none;border-top:1px solid var(--border)}}
 </style>
 </head>
@@ -176,8 +172,8 @@ canvas{border-radius:8px;border:1px solid var(--border);background:var(--bg);max
   <div id="rawLog">
     <div class="rlog-row" style="color:#4a5568;">
       <span class="rlog-time">TIME</span><span class="rlog-tag">TAG</span>
-      <span class="rlog-xy">X , Y (cm)</span>
-      <span class="rlog-ranges">RANGES [A0,A1,A2,A3] cm</span>
+      <span class="rlog-xy">X , Y (m)</span>
+      <span class="rlog-ranges">RANGES [A0,A1,A2,A3] m</span>
       <span class="rlog-qual">QUAL</span>
     </div>
   </div>
@@ -213,7 +209,6 @@ canvas{border-radius:8px;border:1px solid var(--border);background:var(--bg);max
     <div class="players-wrap" id="players"><p class="ph">Select a group</p></div>
     <div class="feed-wrap" id="feed"></div>
 
-    <!-- [NEW] Checkpoint Touch Panel -->
     <div id="cpPanel">
       <div class="side-lbl" style="margin-bottom:6px;">Checkpoint Status</div>
       <div id="cpRows"><span class="cp-empty">No race data</span></div>
@@ -242,7 +237,16 @@ const API = {
 };
 
 const CHECKPOINTS_REQUIRED = 5;
-const ANC = [{x:0,y:0},{x:610,y:0},{x:610,y:440},{x:0,y:440}];
+
+// ── Anchor positions in METRES ──────────────────────────────────────
+// A0=(0,0)  A1=(6.10,0)  A2=(6.10,4.40)  A3=(0,4.40)
+const ANC = [
+  {x:0.00, y:0.00},
+  {x:6.10, y:0.00},
+  {x:6.10, y:4.40},
+  {x:0.00, y:4.40},
+];
+
 const COLORS = ['#00d4ff','#ff3b5c','#00ff88','#ffd700','#a855f7','#ff6b35','#00ffcc','#ff9ff3'];
 
 // ═══════════════════════════════════════════════════════════
@@ -250,10 +254,8 @@ const COLORS = ['#00d4ff','#ff3b5c','#00ff88','#ffd700','#a855f7','#ff6b35','#00
 // ═══════════════════════════════════════════════════════════
 let currentGroupId=null, currentGroupStatus='', currentTotalLaps=10, currentTrackCSV='';
 let raceConfig={total_laps:10,collision_absorbing_time:null,collision_creating_time:null,object_collision_time:null};
-let liveTrack={center:[],inner:[],outer:[],checkpoints:[],start_finish:{x:490,y1:300,y2:340,dir:'left_to_right'}};
+let liveTrack={center:[],inner:[],outer:[],checkpoints:[],start_finish:{x:4.90,y1:3.00,y2:3.40,dir:'left_to_right'}};
 let players=[], tagData={}, reassignMode=false, liveLeaderboard=[], packetsThisSec=0, totalPackets=0;
-
-// [NEW] CP touch state: { cp_id: [{car_id, car_name, lap}, ...] }
 let cpTouches = {};
 
 // ═══════════════════════════════════════════════════════════
@@ -303,7 +305,7 @@ function refreshCollisionStats(){
 }
 
 // ═══════════════════════════════════════════════════════════
-// [NEW] CHECKPOINT PANEL RENDERER
+// CHECKPOINT PANEL
 // ═══════════════════════════════════════════════════════════
 function renderCpPanel() {
   const wrap = document.getElementById('cpRows');
@@ -313,11 +315,8 @@ function renderCpPanel() {
   let html = '';
   for (let i = 0; i < numCPs; i++) {
     const touches = cpTouches[String(i)] || cpTouches[i] || [];
-    // collect unique cars that touched this CP
     const seen = new Map();
-    touches.forEach(t => {
-      if (!seen.has(t.car_id)) seen.set(t.car_id, t);
-    });
+    touches.forEach(t => { if (!seen.has(t.car_id)) seen.set(t.car_id, t); });
 
     const playerIdx_map = {};
     players.forEach((p,idx)=>{ if(p.tag_id!==null) playerIdx_map[parseInt(p.tag_id,10)]=idx; });
@@ -342,7 +341,7 @@ function renderCpPanel() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// CANVAS LAYOUT
+// CANVAS — uses metres directly
 // ═══════════════════════════════════════════════════════════
 const canvas=document.getElementById('c'), ctx=canvas.getContext('2d');
 let cScale,cOffX,cOffY;
@@ -355,6 +354,7 @@ function calcLayout(){
   cOffY=(canvas.height-h*cScale)/2-minY*cScale;
 }
 calcLayout();
+// Transform world-metres → canvas pixels
 function tp(cx,cy){return{px:cOffX+cx*cScale,py:canvas.height-cOffY-cy*cScale};}
 
 // ═══════════════════════════════════════════════════════════
@@ -417,13 +417,12 @@ function draw(){
   ctx.closePath();ctx.stroke();ctx.setLineDash([]);
 
   const hasCsvTrack=liveTrack.center.length>2;
-  if(hasCsvTrack&&!draw._tl){draw._tl=true;}
 
   if(hasCsvTrack){
     const ctrPx=liveTrack.center.map(pt=>tp(pt[0],pt[1]));
     const hasIO=liveTrack.outer.length>2&&liveTrack.inner.length>2;
-    const outerRoad=hasIO?liveTrack.outer.map(pt=>tp(pt[0],pt[1])):offsetPath(ctrPx,30*cScale,1);
-    const innerRoad=hasIO?liveTrack.inner.map(pt=>tp(pt[0],pt[1])):offsetPath(ctrPx,30*cScale,-1);
+    const outerRoad=hasIO?liveTrack.outer.map(pt=>tp(pt[0],pt[1])):offsetPath(ctrPx,30*cScale/100,1);
+    const innerRoad=hasIO?liveTrack.inner.map(pt=>tp(pt[0],pt[1])):offsetPath(ctrPx,30*cScale/100,-1);
     const outerPx=offsetPath(outerRoad,5,1),innerPx=offsetPath(innerRoad,5,-1);
 
     ctx.save();pathToCtx(innerRoad,true);ctx.fillStyle='#162916';ctx.fill();ctx.clip();
@@ -456,7 +455,7 @@ function draw(){
     ctx.shadowColor='rgba(255,215,0,0.9)';ctx.shadowBlur=8;ctx.fillStyle='#ffd700';
     ctx.font='bold 11px JetBrains Mono,monospace';ctx.textAlign='center';
     ctx.fillText('S/F',sfMx+nxSf*22,sfMy+nySf*22);ctx.shadowBlur=0;
-    const ao=sf.dir==='left_to_right'?20:-20;
+    const ao=sf.dir==='left_to_right'?0.20:-0.20;  // metres offset for arrow
     const af=tp(sf.x-ao*0.6,(sf.y1+sf.y2)/2),at=tp(sf.x+ao,(sf.y1+sf.y2)/2);
     ctx.save();ctx.strokeStyle='rgba(255,215,0,0.8)';ctx.lineWidth=2;ctx.setLineDash([4,3]);
     ctx.beginPath();ctx.moveTo(af.px,af.py);ctx.lineTo(at.px,at.py);ctx.stroke();ctx.setLineDash([]);
@@ -467,18 +466,18 @@ function draw(){
     ctx.closePath();ctx.fillStyle='rgba(255,215,0,0.8)';ctx.fill();ctx.restore();
   }
 
-  // ── Checkpoints — [UPDATED] show per-car hit status ──────────────────
+  // Checkpoints — metres
   if(liveTrack.checkpoints.length){
     liveTrack.checkpoints.forEach((cp,idx)=>{
-      const p=tp(cp.x,cp.y),pr=tp(cp.x+cp.r,cp.y),radiusPx=Math.abs(pr.px-p.px);
+      const p=tp(cp.x,cp.y);
+      // radius: cp.r is in metres → scale to pixels
+      const radiusPx = cp.r * cScale;
 
-      // Who hit this CP?
       const touches = cpTouches[String(idx)] || cpTouches[idx] || [];
       const hitters = new Set(touches.map(t=>t.car_id));
       const isHit = hitters.size > 0;
       const isRequired = idx < CHECKPOINTS_REQUIRED;
 
-      // Draw circle
       ctx.save();ctx.globalAlpha=isHit?0.22:(isRequired?0.10:0.04);
       ctx.fillStyle=isHit?'#00ff88':(isRequired?'#ffffff':'#888888');
       ctx.beginPath();ctx.arc(p.px,p.py,radiusPx,0,Math.PI*2);ctx.fill();ctx.restore();
@@ -488,12 +487,10 @@ function draw(){
       ctx.beginPath();ctx.arc(p.px,p.py,radiusPx,0,Math.PI*2);ctx.stroke();
       ctx.setLineDash([]);ctx.shadowBlur=0;ctx.restore();
 
-      // CP label
       ctx.fillStyle=isHit?'rgba(0,255,136,0.9)':(isRequired?'rgba(255,255,255,0.45)':'rgba(128,128,128,0.25)');
       ctx.font='bold 9px JetBrains Mono,monospace';ctx.textAlign='center';
       ctx.fillText('CP'+idx,p.px,p.py+3);
 
-      // [NEW] Draw small colored dots for each car that touched this CP
       if(isHit){
         const hitterArr = [...hitters];
         hitterArr.forEach((car_id, di)=>{
@@ -512,48 +509,77 @@ function draw(){
     });
   }
 
-  // Anchors
+  // Anchors — label in metres
   ANC.forEach((a,i)=>{
     const p=tp(a.x,a.y);
     ctx.shadowColor='rgba(0,212,255,0.7)';ctx.shadowBlur=12;ctx.fillStyle='#00d4ff';
     ctx.beginPath();ctx.arc(p.px,p.py,8,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;
     ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.beginPath();ctx.arc(p.px,p.py,8,0,Math.PI*2);ctx.stroke();
     ctx.fillStyle='rgba(0,212,255,0.9)';ctx.font='bold 12px Rajdhani,sans-serif';ctx.textAlign='left';
-    ctx.fillText('A'+i,p.px+10,p.py-6);
+    ctx.fillText(`A${i} (${a.x},${a.y})m`,p.px+10,p.py-6);
   });
 
-  // Cars
+  // Cars — positions in metres
   const now=Date.now();
   Object.entries(tagData).forEach(([tidStr,d])=>{
     if(now-d.lastTime>6000)return;
-    const tid=parseInt(tidStr),playerIdx=players.findIndex(p=>parseInt(p.tag_id,10)===tid),player=players[playerIdx];
-    const color=playerIdx>=0?COLORS[playerIdx%COLORS.length]:'#ffffff',label=player?player.player_name:`Tag${tid}`,posNum=playerIdx>=0?playerIdx+1:'?';
-    const p=tp(d.x,d.y),xs=ANC.map(a=>a.x),ys=ANC.map(a=>a.y);
-    const oob=d.x<Math.min(...xs)-80||d.x>Math.max(...xs)+80||d.y<Math.min(...ys)-80||d.y>Math.max(...ys)+80;
-    if(d.trail.length>1){ctx.lineJoin='round';for(let i=1;i<d.trail.length;i++){const t0=tp(d.trail[i-1].x,d.trail[i-1].y),t1=tp(d.trail[i].x,d.trail[i].y);ctx.globalAlpha=(i/d.trail.length)*0.45;ctx.strokeStyle=color;ctx.lineWidth=2.5;ctx.beginPath();ctx.moveTo(t0.px,t0.py);ctx.lineTo(t1.px,t1.py);ctx.stroke();}ctx.globalAlpha=1;}
-    ctx.strokeStyle=color;ctx.lineWidth=1.5;ctx.globalAlpha=0.22;ctx.beginPath();ctx.arc(p.px,p.py,15+4*Math.sin(now/120+tid),0,Math.PI*2);ctx.stroke();ctx.globalAlpha=1;
-    const dc=oob?'#ff8800':color;ctx.shadowColor=dc;ctx.shadowBlur=oob?24:18;ctx.fillStyle=dc;ctx.beginPath();ctx.arc(p.px,p.py,12,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;
-    ctx.strokeStyle='#fff';ctx.lineWidth=oob?2.5:2;if(oob)ctx.setLineDash([3,3]);ctx.beginPath();ctx.arc(p.px,p.py,12,0,Math.PI*2);ctx.stroke();ctx.setLineDash([]);
-    ctx.fillStyle='#000';ctx.font='bold 11px Rajdhani,sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(posNum,p.px,p.py);ctx.textBaseline='alphabetic';
-    ctx.font='bold 13px Rajdhani,sans-serif';ctx.textAlign='center';const lw=ctx.measureText(label).width+12;
-    ctx.fillStyle='rgba(0,0,0,0.65)';ctx.fillRect(p.px-lw/2,p.py-32,lw,16);ctx.fillStyle=color;ctx.fillText(label,p.px,p.py-20);
+    const tid=parseInt(tidStr);
+    const playerIdx=players.findIndex(p=>parseInt(p.tag_id,10)===tid);
+    const player=players[playerIdx];
+    const color=playerIdx>=0?COLORS[playerIdx%COLORS.length]:'#ffffff';
+    const label=player?player.player_name:`Tag${tid}`;
+    const posNum=playerIdx>=0?playerIdx+1:'?';
+    const p=tp(d.x,d.y);
+
+    // OOB: more than 0.8m outside anchor bounding box
+    const xs=ANC.map(a=>a.x),ys=ANC.map(a=>a.y);
+    const oob=d.x<Math.min(...xs)-0.8||d.x>Math.max(...xs)+0.8||
+               d.y<Math.min(...ys)-0.8||d.y>Math.max(...ys)+0.8;
+
+    if(d.trail.length>1){
+      ctx.lineJoin='round';
+      for(let i=1;i<d.trail.length;i++){
+        const t0=tp(d.trail[i-1].x,d.trail[i-1].y),t1=tp(d.trail[i].x,d.trail[i].y);
+        ctx.globalAlpha=(i/d.trail.length)*0.45;ctx.strokeStyle=color;ctx.lineWidth=2.5;
+        ctx.beginPath();ctx.moveTo(t0.px,t0.py);ctx.lineTo(t1.px,t1.py);ctx.stroke();
+      }
+      ctx.globalAlpha=1;
+    }
+    ctx.strokeStyle=color;ctx.lineWidth=1.5;ctx.globalAlpha=0.22;
+    ctx.beginPath();ctx.arc(p.px,p.py,15+4*Math.sin(now/120+tid),0,Math.PI*2);ctx.stroke();ctx.globalAlpha=1;
+    const dc=oob?'#ff8800':color;
+    ctx.shadowColor=dc;ctx.shadowBlur=oob?24:18;ctx.fillStyle=dc;
+    ctx.beginPath();ctx.arc(p.px,p.py,12,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;
+    ctx.strokeStyle='#fff';ctx.lineWidth=oob?2.5:2;if(oob)ctx.setLineDash([3,3]);
+    ctx.beginPath();ctx.arc(p.px,p.py,12,0,Math.PI*2);ctx.stroke();ctx.setLineDash([]);
+    ctx.fillStyle='#000';ctx.font='bold 11px Rajdhani,sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText(posNum,p.px,p.py);ctx.textBaseline='alphabetic';
+    ctx.font='bold 13px Rajdhani,sans-serif';ctx.textAlign='center';
+    const lw=ctx.measureText(label).width+12;
+    ctx.fillStyle='rgba(0,0,0,0.65)';ctx.fillRect(p.px-lw/2,p.py-32,lw,16);
+    ctx.fillStyle=color;ctx.fillText(label,p.px,p.py-20);
+
     const wH=d.wallHits||0,cH=d.carHits||0;
-    if((wH>0||cH>0)&&Math.sin(now/150+tid)>0){ctx.strokeStyle=wH>0?'#ff6b35':'#ff3b5c';ctx.lineWidth=3;ctx.globalAlpha=0.65;ctx.beginPath();ctx.arc(p.px,p.py,15,0,Math.PI*2);ctx.stroke();ctx.globalAlpha=1;}
+    if((wH>0||cH>0)&&Math.sin(now/150+tid)>0){
+      ctx.strokeStyle=wH>0?'#ff6b35':'#ff3b5c';ctx.lineWidth=3;ctx.globalAlpha=0.65;
+      ctx.beginPath();ctx.arc(p.px,p.py,15,0,Math.PI*2);ctx.stroke();ctx.globalAlpha=1;
+    }
+
     const li=d.lapInfo;
     if(li&&li.is_racing){
       const el2=d.lapStartTime?(now-d.lapStartTime)/1000:(li.current_lap_elapsed||0);
-      const el2Clamped=Math.max(0,el2);
-      const m=Math.floor(el2Clamped/60),s=(el2Clamped%60).toFixed(2).padStart(5,'0'),ts=m>0?`${m}:${s}`:s,ls=`L${li.current_lap}/${li.total_laps}`;
+      const el2c=Math.max(0,el2);
+      const m=Math.floor(el2c/60),s=(el2c%60).toFixed(2).padStart(5,'0'),ts=m>0?`${m}:${s}`:s;
+      const ls=`L${li.current_lap}/${li.total_laps}`;
       const tw2=86,th2=30,tx=p.px-tw2/2,ty=p.py-70;
       ctx.fillStyle='rgba(0,0,0,0.75)';ctx.beginPath();ctx.roundRect(tx,ty,tw2,th2,5);ctx.fill();
       ctx.strokeStyle=color;ctx.lineWidth=1;ctx.beginPath();ctx.roundRect(tx,ty,tw2,th2,5);ctx.stroke();
       ctx.font='bold 9px Rajdhani,sans-serif';ctx.fillStyle=color;ctx.textAlign='center';ctx.fillText(ls,p.px,ty+10);
       ctx.font='bold 12px JetBrains Mono,monospace';ctx.fillStyle='#fff';ctx.fillText(ts,p.px,ty+24);
 
-      // [NEW] Draw CP progress bar below the lap timer box
       if(li.checkpoints_hit!=null){
-        const cpTotal=CHECKPOINTS_REQUIRED, cpHit=li.checkpoints_hit||0;
-        const bw=tw2, bh=5, bx=tx, by=ty+th2+3;
+        const cpTotal=CHECKPOINTS_REQUIRED,cpHit=li.checkpoints_hit||0;
+        const bw=tw2,bh=5,bx=tx,by=ty+th2+3;
         ctx.fillStyle='rgba(255,255,255,0.1)';ctx.beginPath();ctx.roundRect(bx,by,bw,bh,2);ctx.fill();
         if(cpHit>0){
           const fillW=Math.min(bw,bw*(cpHit/cpTotal));
@@ -565,14 +591,17 @@ function draw(){
         ctx.textAlign='center';ctx.fillText(`CP ${cpHit}/${cpTotal}`,p.px,by+bh+8);
       }
     }
-    ctx.font='9px JetBrains Mono,monospace';ctx.fillStyle=oob?'#ff8800':'rgba(255,255,255,0.55)';ctx.textAlign='center';
-    ctx.fillText(`${d.x.toFixed(0)},${d.y.toFixed(0)}cm`,p.px,p.py+28);
+
+    // Position in metres with 3 decimal places
+    ctx.font='9px JetBrains Mono,monospace';
+    ctx.fillStyle=oob?'#ff8800':'rgba(255,255,255,0.55)';ctx.textAlign='center';
+    ctx.fillText(`${d.x.toFixed(3)},${d.y.toFixed(3)}m`,p.px,p.py+28);
     if(d.speed!=null){ctx.fillStyle='rgba(255,255,255,0.4)';ctx.fillText(d.speed.toFixed(1)+' km/h',p.px,p.py+39);}
     if(oob){ctx.fillStyle='#ff8800';ctx.font='bold 9px JetBrains Mono,monospace';ctx.fillText('⚠ OOB',p.px,p.py+50);}
     ctx.textAlign='left';
   });
 
-  // Leaderboard overlay (bottom-right)
+  // Leaderboard overlay
   {
     function fmtT(s){if(s==null||s===Infinity)return'—';const m=Math.floor(s/60);return m>0?`${m}:${(s%60).toFixed(2).padStart(5,'0')}`:(s%60).toFixed(2).padStart(5,'0');}
     const ranked=[];
@@ -620,7 +649,6 @@ function connectWS(){
       if(msg.type==='connection'){if(msg.track)applyLiveTrack(msg.track);return;}
       if(msg.track) applyLiveTrack(msg.track);
 
-      // [NEW] absorb CP touches from any message
       if(msg.checkpoint_touches) {
         cpTouches = msg.checkpoint_touches;
         renderCpPanel();
@@ -662,7 +690,7 @@ function connectWS(){
         if(msg.lap_info!=null){const pr=tagData[tid].lapInfo?.is_racing;tagData[tid].lapInfo=msg.lap_info;if(pr!==msg.lap_info?.is_racing)setTimeout(renderPlayers,10);}
         tagData[tid].trail.push({x:msg.x,y:msg.y});if(tagData[tid].trail.length>40)tagData[tid].trail.shift();
         packetsThisSec++;totalPackets++;
-        if(totalPackets%20===0){dbg('d_pos',`Tag${tid} (${msg.x.toFixed(0)},${msg.y.toFixed(0)})cm`,'ok');refreshDebugBar();}
+        if(totalPackets%20===0){dbg('d_pos',`Tag${tid} (${msg.x.toFixed(3)},${msg.y.toFixed(3)})m`,'ok');refreshDebugBar();}
         if(msg.game_events?.length){
           appendFeed(msg.game_events.map(ev=>{
             if(ev.type==='lap_done'){
@@ -671,8 +699,6 @@ function connectWS(){
               if(_p&&_p.tag_id!==null){
                 const _t=parseInt(_p.tag_id,10);
                 if(!isNaN(_t)&&tagData[_t]){
-                  const _te=document.querySelector(`.lap-timer[data-tag="${_t}"]`);
-                  if(_te) _te.textContent='0.00';
                   tagData[_t].lapStartTime=Date.now();
                   if(tagData[_t].lapInfo){tagData[_t].lapInfo.checkpoints_hit=0;if(tagData[_t].lapInfo.current_lap)tagData[_t].lapInfo.current_lap=ev.lap+1;}
                   setTimeout(renderPlayers,10);
@@ -688,11 +714,7 @@ function connectWS(){
               return `START  ${ev.car_name}`;
             }
             if(ev.type==='checkpoint'){
-              // [NEW] Update cpTouches from event cp_touches data
-              if(ev.cp_index!=null&&ev.cp_touches){
-                cpTouches[String(ev.cp_index)]=ev.cp_touches;
-                renderCpPanel();
-              }
+              if(ev.cp_index!=null&&ev.cp_touches){cpTouches[String(ev.cp_index)]=ev.cp_touches;renderCpPanel();}
               const _p=players.find(p=>p.player_name===ev.car_name);
               if(_p&&_p.tag_id!==null){const _t=parseInt(_p.tag_id,10);if(!isNaN(_t)&&tagData[_t]?.lapInfo)tagData[_t].lapInfo.checkpoints_hit=ev.cp_index+1;}
               return `CP${ev.cp_index}  ${ev.car_name}`;
@@ -713,7 +735,7 @@ function connectWS(){
   };
 }
 
-// CSV parser
+// CSV parser — coords in metres
 function parseCsvIntoLiveTrack(csvText){
   if(!csvText||!csvText.trim())return;
   const center=[],inner=[],outer=[],cpMap={};let sf=null;
@@ -884,7 +906,7 @@ function renderCards(editable,now){
     const color=COLORS[idx%COLORS.length],tid=parseInt(p.tag_id,10),d=!isNaN(tid)?tagData[tid]:null;
     const fresh=d&&(now-d.lastTime)<4000,racing=currentGroupStatus==='live'&&!reassignMode&&fresh;
     let posLine='';
-    if(racing&&d) posLine=`<div class="pcard-pos" id="ppos-${tid}">x:${d.x.toFixed(0)} y:${d.y.toFixed(0)} · ${(d.speed||0).toFixed(1)} km/h</div>`;
+    if(racing&&d) posLine=`<div class="pcard-pos" id="ppos-${tid}">x:${d.x.toFixed(3)} y:${d.y.toFixed(3)} m · ${(d.speed||0).toFixed(1)} km/h</div>`;
     else if(currentGroupStatus==='live'&&!reassignMode&&!isNaN(tid)) posLine=`<div class="pcard-sub" style="color:#fbbf24">Waiting for signal…</div>`;
     let lapLine='';
     if(d?.lapInfo?.is_racing){
@@ -900,7 +922,6 @@ function renderCards(editable,now){
         if(bonTot>0) colRow+=`<span class="col-chip cc-bon">-${bonTot.toFixed(1)}s</span>`;
         colRow+='</div>';
       }
-      // [UPDATED] CP pips with progress bar — show cpHit/cpTotal
       const cpPips=Array.from({length:cpTotal},(_,i)=>{
         const done=i<cpHit,next=i===cpHit,col=done?'#00ff88':(next?'#ffd700':'rgba(255,255,255,0.12)'),brd=done?'#00ff88':(next?'#ffd700':'rgba(255,255,255,0.2)');
         return `<span title="CP${i}" style="display:inline-block;width:11px;height:11px;border-radius:50%;background:${col};border:1.5px solid ${brd};transition:background .3s;"></span>`;
@@ -942,7 +963,7 @@ function renderCards(editable,now){
 function updatePositionLabels(){
   if(currentGroupStatus!=='live'||reassignMode)return;
   const now=Date.now();
-  players.forEach(p=>{const tid=parseInt(p.tag_id,10);if(isNaN(tid))return;const d=tagData[tid];if(!d)return;const el=document.getElementById('ppos-'+tid);if(el&&(now-d.lastTime)<4000)el.textContent=`x:${d.x.toFixed(0)} y:${d.y.toFixed(0)} · ${(d.speed||0).toFixed(1)} km/h`;else if(!el&&(now-d.lastTime)<4000)renderPlayers();});
+  players.forEach(p=>{const tid=parseInt(p.tag_id,10);if(isNaN(tid))return;const d=tagData[tid];if(!d)return;const el=document.getElementById('ppos-'+tid);if(el&&(now-d.lastTime)<4000)el.textContent=`x:${d.x.toFixed(3)} y:${d.y.toFixed(3)} m · ${(d.speed||0).toFixed(1)} km/h`;else if(!el&&(now-d.lastTime)<4000)renderPlayers();});
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -981,7 +1002,7 @@ function renderLeaderboard(){
 }
 
 // ═══════════════════════════════════════════════════════════
-// RAW MONITOR
+// RAW MONITOR — ranges shown in metres
 // ═══════════════════════════════════════════════════════════
 const RAW_MAX_ROWS=80;let rawPaused=false,rawTagCounters={};
 function rawMonitorIngest(tid,msg){
@@ -992,10 +1013,11 @@ function rawMonitorIngest(tid,msg){
   renderTagRatePills();if(rawPaused)return;
   const log=document.getElementById('rawLog');
   const timeStr=new Date().toLocaleTimeString('en-GB',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'})+'.'+String(now%1000).padStart(3,'0');
-  const ranges=Array.isArray(msg.range)?msg.range.map(r=>String(Math.round(r)).padStart(4,' ')).join(' '):'—';
+  // ranges are now in metres (4 decimal places)
+  const ranges=Array.isArray(msg.range)?msg.range.map(r=>Number(r).toFixed(2).padStart(6,' ')).join(' '):'—';
   const qual=msg.quality||'?',qc=qual==='excellent'?'excellent':qual==='good'?'good':qual==='fair'?'fair':'oob';
   const color=COLORS[tid%COLORS.length],row=document.createElement('div');row.className='rlog-row';
-  row.innerHTML=`<span class="rlog-time">${timeStr.slice(0,12)}</span><span class="rlog-tag" style="color:${color}">T${tid}</span><span class="rlog-xy">${msg.x!=null?msg.x.toFixed(0).padStart(4,' '):'  —'},${msg.y!=null?msg.y.toFixed(0).padStart(4,' '):'  —'}cm</span><span class="rlog-ranges">[ ${ranges} ]  ${msg.speed!=null?msg.speed.toFixed(1):'—'}km/h</span><span class="rlog-qual ${qc}">${qual}</span>`;
+  row.innerHTML=`<span class="rlog-time">${timeStr.slice(0,12)}</span><span class="rlog-tag" style="color:${color}">T${tid}</span><span class="rlog-xy">${msg.x!=null?msg.x.toFixed(3).padStart(6,' '):'   —'},${msg.y!=null?msg.y.toFixed(3).padStart(6,' '):'   —'}m</span><span class="rlog-ranges">[ ${ranges} ]m  ${msg.speed!=null?msg.speed.toFixed(1):'—'}km/h</span><span class="rlog-qual ${qc}">${qual}</span>`;
   const header=log.firstChild;log.insertBefore(row,header?header.nextSibling:null);
   while(log.children.length>RAW_MAX_ROWS+1)log.removeChild(log.lastChild);
 }
@@ -1012,7 +1034,8 @@ setInterval(renderTagRatePills,1000);
 // INIT
 // ═══════════════════════════════════════════════════════════
 loadTournaments();
-console.log('[XRace] ready — CPs required per lap:',CHECKPOINTS_REQUIRED);
+console.log('[XRace] ready — units: metres | CPs required per lap:',CHECKPOINTS_REQUIRED);
+console.log('[XRace] Anchors:', ANC);
 </script>
 </body>
 </html>
