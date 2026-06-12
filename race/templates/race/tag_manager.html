@@ -945,7 +945,10 @@ async function pushScreen(screenType) {
   if (btn) { btn.classList.add('sending'); btn.disabled = true; }
 
   try {
-    const resp = await fetch(BACKEND_BASE + '/api/push-live-screen/', {
+    // ── Step 1: Fetch ScreenData from remote xrace_backend ───────────────
+    // xrace_backend is deployed remotely, so it can't call localhost:8001.
+    // Instead, we fetch the assembled JSON here in the browser.
+    const dataResp = await fetch(BACKEND_BASE + '/api/push-live-screen/', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -953,19 +956,50 @@ async function pushScreen(screenType) {
         display_screen: screenType,
       }),
     });
-    const result = await resp.json();
 
-    if (result.success && result.broadcast_ok) {
+    if (!dataResp.ok) {
+      showWallToast(`✗ Backend error ${dataResp.status}`, 'err');
+      updateWallStatus(screenType, false);
+      return;
+    }
+
+    const dataResult = await dataResp.json();
+    if (!dataResult.success || !dataResult.screen_data) {
+      showWallToast('✗ Backend returned no screen_data', 'err');
+      updateWallStatus(screenType, false);
+      return;
+    }
+
+    const screenData = dataResult.screen_data;
+
+    // ── Step 2: POST directly to local Xracelocal /broadcast-screen/ ─────
+    // The browser IS on the local machine, so it can reach localhost:8001
+    // even though the remote server cannot.
+    const broadcastResp = await fetch('http://localhost:8001/broadcast-screen/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(screenData),
+    });
+
+    const broadcastResult = await broadcastResp.json();
+
+    if (broadcastResult.success) {
       setActiveWallBtn(screenType);
       showWallToast(`✓ Live wall → ${screenType.toUpperCase()}`, 'ok');
       updateWallStatus(screenType, true);
     } else {
-      const err = result.broadcast_response?.error || 'Broadcast failed';
-      showWallToast(`✗ ${err}`, 'err');
+      showWallToast(`✗ Broadcast failed`, 'err');
       updateWallStatus(screenType, false);
     }
+
   } catch(e) {
-    showWallToast('✗ Network error: ' + e.message, 'err');
+    // Common causes:
+    // - "Failed to fetch" → Xracelocal not running on localhost:8001
+    // - Network error fetching backend → xrace_backend unreachable
+    const msg = e.message.includes('localhost') || e.message.includes('8001')
+      ? '✗ Xracelocal not running on :8001'
+      : '✗ Network error: ' + e.message;
+    showWallToast(msg, 'err');
     updateWallStatus(screenType, false);
   } finally {
     if (btn) { btn.classList.remove('sending'); btn.disabled = false; }
