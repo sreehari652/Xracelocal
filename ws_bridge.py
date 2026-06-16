@@ -1099,6 +1099,10 @@ def udp_receiver():
     while running:
         try:
             data, addr = sock.recvfrom(2048)
+            try:
+                sock.sendto(data, ('192.168.29.27', UDP_PORT))
+            except Exception:
+                pass
             stats['udp_total'] += 1
 
             # ── Parse AT+RANGE format ──────────────────────────────────
