@@ -13,12 +13,31 @@ UDP packet format from anchor ESP32:
 
 All positions and distances are in CENTIMETRES internally.
 Track CSV coordinates must also be in cm.
+
+Filtering pipeline (added):
+  UDP raw ranges
+    → Layer 1: per-anchor spike rejection  (jump > JUMP_THRESHOLD_CM discarded)
+    → Layer 2: per-anchor rolling median   (window = MEDIAN_WINDOW)
+    → Trilateration → (x, y)
+    → Layer 3: per-tag Kalman filter       (4-state: x, y, vx, vy)
+    → tag.update_position()
 """
 
 import asyncio, websockets, socket, json, math, time, threading, signal, sys
 import urllib.request, urllib.error, re
+import numpy as np
 from datetime import datetime
 from collections import defaultdict, deque
+import statistics
+
+# ═══════════════════════════════════════════════════════════════════════
+# FILTERING CONSTANTS  (medium-aggression tuning)
+# ═══════════════════════════════════════════════════════════════════════
+JUMP_THRESHOLD_CM = 500.0   # L1: reject per-anchor jump larger than this
+MEDIAN_WINDOW     = 5       # L2: rolling median window per anchor
+KALMAN_R          = 40.0    # L3: measurement noise covariance
+KALMAN_Q          = 0.08    # L3: process noise covariance
+KALMAN_DT         = 0.04    # L3: expected dt (matches ~25 Hz UWB update rate)
 
 # ═══════════════════════════════════════════════════════════════════════
 # NETWORK CONFIGURATION  ← edit here
@@ -30,8 +49,6 @@ DJANGO_API_BASE = 'https://xraceapi.zyberspace.in'
 LAP_API_URL     = f'{DJANGO_API_BASE}/api/record-lap/'
 
 # ── Anchor physical positions in CENTIMETRES ──────────────────────────────
-#   A0 = origin (0,0)          A1 = (610, 0)
-#   A2 = (610, 440)          A3 = (0, 440)
 ANCHOR_POSITIONS = {
     0: (0.00, 0.00),
     1: (610.00, 0.00),
@@ -64,8 +81,8 @@ CAR_COLLISION_VICTIM_BONUS     = CAR_COLLISION_VICTIM_BONUS_DEFAULT
 START_LINE_X         = 490.00
 START_LINE_Y1        = 300.00
 START_LINE_Y2        = 340.00
-LINE_CROSS_TOLERANCE = 8.00   # cm
-LINE_Y_TOLERANCE     = 30.00   # cm
+LINE_CROSS_TOLERANCE = 8.00
+LINE_Y_TOLERANCE     = 30.00
 SF_CROSSING_DIR      = 'left_to_right'
 
 # ── Default checkpoints in CENTIMETRES (overridden by CSV) ─────────────────
@@ -81,12 +98,12 @@ current_group_id: int | None = None
 
 CORNER_CUT_PENALTY         = 3.0
 CORNER_CUT_VOID_LAP        = False
-CAR_COLLISION_DISTANCE_M   = 25.0   # cm
+CAR_COLLISION_DISTANCE_M   = 25.0
 CAR_COLLISION_COOLDOWN     = 1.0
-SPEED_DIFF_THRESHOLD       = 10.0   # cm/s
-WALL_TOLERANCE_M           = 5.0   # cm
+SPEED_DIFF_THRESHOLD       = 10.0
+WALL_TOLERANCE_M           = 5.0
 WALL_COLLISION_COOLDOWN    = 0.5
-MAX_PLAUSIBLE_SPEED_M_S    = 2800.0   # cm/s  (~100 km/h)
+MAX_PLAUSIBLE_SPEED_M_S    = 2800.0
 SPEED_DISPLAY_UNIT         = 'km/h'
 
 PRINT_LAP_EVENTS       = True
@@ -97,30 +114,142 @@ PRINT_ANOMALIES        = True
 TRAIL_LENGTH = 30
 TAG_TIMEOUT  = 5
 
-# ── Checkpoint touch history: cp_id → list of touch records ───────────
 checkpoint_touch_history: dict = {}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# THREE-LAYER UWB FILTER  (one instance per tag)
+# ═══════════════════════════════════════════════════════════════════════
+
+class UWBFilter:
+    """
+    Layer 1 — per-anchor jump rejection
+      Any anchor reading that jumps more than JUMP_THRESHOLD_CM from its
+      last accepted value is treated as a spike and replaced with the
+      last known good value (or 0 if none yet).
+
+    Layer 2 — per-anchor rolling median
+      A deque of the last MEDIAN_WINDOW valid readings per anchor.
+      Median is used (not mean) because it is completely immune to
+      remaining outliers.
+
+    Layer 3 — Kalman filter on final (x, y)
+      4-state filter: [x, y, vx, vy].  Predicts ahead then corrects
+      with the trilaterated measurement.  R / Q are tuned for medium
+      aggression: smooth enough to kill jitter, responsive enough to
+      follow a fast RC car.
+    """
+
+    def __init__(self, tag_id: int, anchor_count: int = 4):
+        self.tag_id = tag_id
+        self.n      = anchor_count
+
+        # L1
+        self._last_valid: dict[int, float] = {}
+
+        # L2
+        self._buffers: dict[int, deque] = {}
+
+        # L3
+        self._kf             = self._make_kalman()
+        self._kf_initialised = False
+
+        # diagnostics
+        self.l1_rejects  = 0
+        self.l2_smoothed = 0
+        self.l3_updates  = 0
+
+    # ── L1 ──────────────────────────────────────────────────────────────
+    def _l1(self, anchor_id: int, dist: float) -> float | None:
+        if dist <= 0:
+            return None
+        prev = self._last_valid.get(anchor_id)
+        if prev is not None and abs(dist - prev) > JUMP_THRESHOLD_CM:
+            self.l1_rejects += 1
+            return None          # spike — caller uses last good median
+        self._last_valid[anchor_id] = dist
+        return dist
+
+    # ── L2 ──────────────────────────────────────────────────────────────
+    def _l2(self, anchor_id: int, dist: float) -> float:
+        buf = self._buffers.setdefault(anchor_id, deque(maxlen=MEDIAN_WINDOW))
+        buf.append(dist)
+        self.l2_smoothed += 1
+        return statistics.median(buf)
+
+    # ── L3 ──────────────────────────────────────────────────────────────
+    @staticmethod
+    def _make_kalman():
+        from filterpy.kalman import KalmanFilter
+        dt = KALMAN_DT
+        kf = KalmanFilter(dim_x=4, dim_z=2)
+        kf.F = np.array([
+            [1, 0, dt, 0],
+            [0, 1,  0, dt],
+            [0, 0,  1,  0],
+            [0, 0,  0,  1],
+        ], dtype=float)
+        kf.H = np.array([
+            [1, 0, 0, 0],
+            [0, 1, 0, 0],
+        ], dtype=float)
+        kf.R = np.eye(2) * KALMAN_R
+        kf.Q = np.eye(4) * KALMAN_Q
+        kf.P = np.eye(4) * 20.0
+        kf.x = np.zeros((4, 1))
+        return kf
+
+    def _l3(self, x: float, y: float) -> tuple[float, float]:
+        if not self._kf_initialised:
+            self._kf.x[:] = [[x], [y], [0.0], [0.0]]
+            self._kf_initialised = True
+            return x, y
+        self._kf.predict()
+        self._kf.update(np.array([[x], [y]]))
+        self.l3_updates += 1
+        return float(self._kf.x[0]), float(self._kf.x[1])
+
+    # ── Public API ───────────────────────────────────────────────────────
+    def filter_ranges(self, raw: list[float]) -> list[float]:
+        """Apply L1 + L2 to anchor ranges. Returns cleaned list (same length)."""
+        out = []
+        for i, r in enumerate(raw):
+            if r <= 0:
+                # Keep last smoothed value for this anchor if any
+                buf = self._buffers.get(i)
+                out.append(statistics.median(buf) if buf else 0.0)
+                continue
+            r1 = self._l1(i, r)
+            if r1 is None:
+                # Spike: use current median (don't update buffer)
+                buf = self._buffers.get(i)
+                out.append(statistics.median(buf) if buf else 0.0)
+            else:
+                out.append(self._l2(i, r1))
+        return out
+
+    def filter_position(self, x: float, y: float) -> tuple[float, float]:
+        """Apply L3 Kalman to trilaterated (x, y)."""
+        return self._l3(x, y)
+
+    def reset(self):
+        self._last_valid.clear()
+        self._buffers.clear()
+        self._kf             = self._make_kalman()
+        self._kf_initialised = False
+        self.l1_rejects = self.l2_smoothed = self.l3_updates = 0
 
 
 # ═══════════════════════════════════════════════════════════════════════
 # UDP PACKET PARSER  — AT+RANGE string format
 # ═══════════════════════════════════════════════════════════════════════
 
-# Pre-compiled regex for AT+RANGE line
 _RE_RANGE = re.compile(
     r'tid:(\d+).*?range:\(([^)]+)\).*?ancid:\(([^)]+)\)',
     re.IGNORECASE
 )
 
 def parse_at_range(raw_bytes: bytes):
-    """
-    Parse anchor UDP packet:
-      b"A0,AT+RANGE=tid:0,mask:0F,seq:122,range:(354,636,1157,1134,0,0,0,0),ancid:(0,1,2,3,-1,-1,-1,-1)"
-
-    Returns (tag_id: int, ranges_m: list[float], ancid: list[int])
-    or raises ValueError on parse failure.
-
-    Ranges from hardware are in cm → converted to metres here.
-    """
     text = raw_bytes.decode('utf-8', errors='ignore').strip()
     m = _RE_RANGE.search(text)
     if not m:
@@ -129,15 +258,12 @@ def parse_at_range(raw_bytes: bytes):
     tag_id    = int(m.group(1))
     range_raw = [float(x.strip()) for x in m.group(2).split(',')]
     ancid_raw = [int(x.strip())   for x in m.group(3).split(',')]
-
-    # Hardware reports ranges in cm, keeping it as cm
-    ranges_m = range_raw
-
+    ranges_m  = range_raw   # hardware already in cm
     return tag_id, ranges_m, ancid_raw
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# TRACK CSV PARSER  (coordinates in METRES)
+# TRACK CSV PARSER
 # ═══════════════════════════════════════════════════════════════════════
 
 class TrackData:
@@ -222,7 +348,7 @@ def apply_track_data(td: TrackData):
     START_LINE_Y1   = td.sf_y1
     START_LINE_Y2   = td.sf_y2
     SF_CROSSING_DIR = td.sf_dir
-    print(f"[TRACK] S/F  x={START_LINE_X:.3f}m  y=[{START_LINE_Y1:.3f}..{START_LINE_Y2:.3f}]m  dir={SF_CROSSING_DIR}")
+    print(f"[TRACK] S/F  x={START_LINE_X:.3f}cm  y=[{START_LINE_Y1:.3f}..{START_LINE_Y2:.3f}]cm  dir={SF_CROSSING_DIR}")
 
     for eng in race_mgr._engines.values():
         eng.reset()
@@ -324,7 +450,7 @@ def post_lap_to_api(tag_id: int, lap):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# POSITIONING  (trilateration — all distances in metres)
+# POSITIONING  (trilateration — all distances in cm)
 # ═══════════════════════════════════════════════════════════════════════
 
 class Positioning:
@@ -390,7 +516,7 @@ class Positioning:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# TAG STATE  (positions in metres, speed in m/s internally)
+# TAG STATE  (positions in cm, speed in cm/s internally)
 # ═══════════════════════════════════════════════════════════════════════
 
 class TagState:
@@ -402,9 +528,12 @@ class TagState:
         self.history = deque(maxlen=TRAIL_LENGTH)
         self.update_count = 0
         self._prev_x = self._prev_y = self._prev_t = None
-        self.speed_ms = self.max_speed_ms = 0.0   # m/s
+        self.speed_ms = self.max_speed_ms = 0.0
         self.pkt_total = self.pkt_accepted = self.pkt_rejected = 0
         self.last_ranges = [0.0]*ANCHOR_COUNT
+
+        # ── THREE-LAYER FILTER (one per tag) ─────────────────────────
+        self._filter = UWBFilter(tid, ANCHOR_COUNT)
 
     def update_position(self, rx, ry, quality, anc, now):
         if self._prev_t is not None:
@@ -420,12 +549,11 @@ class TagState:
         self.update_count += 1; self.pkt_accepted += 1
 
     def speed_display(self):
-        """Return speed in selected display unit."""
         if SPEED_DISPLAY_UNIT == 'km/h':
-            return self.speed_ms * 0.036 # cm/s to km/h
+            return self.speed_ms * 0.036   # cm/s → km/h
         if SPEED_DISPLAY_UNIT == 'm/s':
             return self.speed_ms / 100.0
-        return self.speed_ms  # cm/s fallback
+        return self.speed_ms
 
     def is_active(self):
         return self.status and (time.time() - self.last_update) < TAG_TIMEOUT
@@ -437,6 +565,7 @@ class TagState:
         self.status = False
         self.update_count = self.pkt_total = self.pkt_accepted = self.pkt_rejected = 0
         self.last_ranges = [0.0]*ANCHOR_COUNT
+        self._filter.reset()   # ← reset all three filter layers
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -550,7 +679,7 @@ class ScoringEngine:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# TRACK / COLLISION GEOMETRY  (metres)
+# TRACK / COLLISION GEOMETRY
 # ═══════════════════════════════════════════════════════════════════════
 
 class Track:
@@ -569,7 +698,6 @@ def create_track_from_data(td: TrackData) -> Track:
 
 
 def create_oval_track(cx=305.0, cy=220.0, ow=260.0, oh=190.0, tw=30.0, n=40):
-    """Default oval track in cm."""
     o, i = [], []
     for k in range(n):
         a = 2*math.pi*k/n
@@ -595,7 +723,7 @@ def dist_to_boundary(px, py, pts):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# LAP ENGINE  (all geometry in metres)
+# LAP ENGINE
 # ═══════════════════════════════════════════════════════════════════════
 
 class LapEngine:
@@ -777,7 +905,7 @@ class RaceManager:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# COLLISION ENGINE  (distances in metres, speed in m/s)
+# COLLISION ENGINE
 # ═══════════════════════════════════════════════════════════════════════
 
 class CollisionEngine:
@@ -955,7 +1083,7 @@ def _serialize_cp_touches() -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# UDP RECEIVER  — parses AT+RANGE string format
+# UDP RECEIVER  — AT+RANGE parser with full three-layer filtering
 # ═══════════════════════════════════════════════════════════════════════
 
 def udp_receiver():
@@ -965,7 +1093,7 @@ def udp_receiver():
     sock.bind(('', UDP_PORT))
     sock.settimeout(0.1)
     print(f"[UDP] Listening on port {UDP_PORT}")
-    print(f"[UDP] Expecting AT+RANGE packets from anchors (ranges in cm → converted to metres)")
+    print(f"[UDP] Filtering: L1 jump>{JUMP_THRESHOLD_CM}cm | L2 median(w={MEDIAN_WINDOW}) | L3 Kalman(R={KALMAN_R},Q={KALMAN_Q})")
 
     while running:
         try:
@@ -977,7 +1105,7 @@ def udp_receiver():
                 tid, ranges_m, ancid = parse_at_range(data)
             except ValueError as e:
                 stats['udp_invalid'] += 1
-                if stats['udp_total'] % 50 == 1:     # throttle noisy log
+                if stats['udp_total'] % 50 == 1:
                     print(f"[UDP] Parse fail from {addr}: {e}")
                 continue
 
@@ -986,24 +1114,33 @@ def udp_receiver():
                 continue
 
             # Reorder by ancid so index matches ANCHOR_POSITIONS
-            raw_ranges_m = reorder_by_ancid(ranges_m, ancid, ANCHOR_COUNT)
+            raw_ranges = reorder_by_ancid(ranges_m, ancid, ANCHOR_COUNT)
 
             now = time.time()
             tag = tags[tid]; tag.pkt_total += 1
 
-            pos, quality, anc_count = Positioning.calculate(raw_ranges_m, ANCHOR_POSITIONS)
+            # ── LAYER 1 + 2: filter per-anchor ranges ─────────────────
+            filtered_ranges = tag._filter.filter_ranges(raw_ranges)
+
+            # ── Trilaterate on filtered ranges ─────────────────────────
+            pos, quality, anc_count = Positioning.calculate(filtered_ranges, ANCHOR_POSITIONS)
             if pos is None:
                 tag.pkt_rejected += 1; stats['udp_invalid'] += 1
                 continue
 
-            rx, ry = pos
+            # ── LAYER 3: Kalman on (x, y) ─────────────────────────────
+            rx, ry = tag._filter.filter_position(pos[0], pos[1])
+
             tag.update_position(rx, ry, quality, anc_count, now)
-            tag.last_ranges = [round(r, 4) for r in raw_ranges_m]
+            # Store filtered ranges for display (raw would be misleading)
+            tag.last_ranges = [round(r, 1) for r in filtered_ranges]
             stats['udp_valid'] += 1; stats['tags_seen'].add(tid)
 
-            print(f"[UWB] Tag{tid}  ({rx:.3f},{ry:.3f})cm  "
-                  f"ranges={[round(r,2) for r in raw_ranges_m]}cm  {quality}  "
-                  f"{tag.speed_display():.1f}{SPEED_DISPLAY_UNIT}")
+            print(f"[UWB] Tag{tid}  pos=({rx:.1f},{ry:.1f})cm  "
+                  f"raw=[{','.join(f'{r:.0f}' for r in raw_ranges)}]  "
+                  f"flt=[{','.join(f'{r:.0f}' for r in filtered_ranges)}]  "
+                  f"{quality}  {tag.speed_display():.1f}{SPEED_DISPLAY_UNIT}  "
+                  f"L1rej={tag._filter.l1_rejects}")
 
             game_evts = process_race_update(tid, now)
 
@@ -1012,7 +1149,7 @@ def udp_receiver():
                 open_lap = scoring._open.get(tid)
                 msg = json.dumps(dict(
                     type="tag_position", tag_id=tid,
-                    x=round(tag.x, 4), y=round(tag.y, 4),
+                    x=round(rx, 4), y=round(ry, 4),
                     range=tag.last_ranges,
                     speed=round(tag.speed_display(), 2),
                     speed_ms=round(tag.speed_ms, 3),
@@ -1061,13 +1198,19 @@ async def handle_client(ws):
         now = time.time()
         await ws.send(json.dumps(dict(
             type="connection", status="connected",
-            message="UWB Racing — AT+RANGE format, centimetres",
+            message="UWB Racing — AT+RANGE format, centimetres, 3-layer filter active",
             timestamp=now,
             server_info=dict(
                 udp_port=UDP_PORT, ws_port=WS_PORT,
                 anchor_count=ANCHOR_COUNT, tag_count=TAG_COUNT,
                 total_laps=TOTAL_LAPS,
                 units='centimetres',
+                filter=dict(
+                    l1_jump_threshold_cm=JUMP_THRESHOLD_CM,
+                    l2_median_window=MEDIAN_WINDOW,
+                    l3_kalman_R=KALMAN_R,
+                    l3_kalman_Q=KALMAN_Q,
+                ),
                 uptime_seconds=(datetime.now()-stats['start']).total_seconds()),
             anchors={str(k):{"x":v[0],"y":v[1]} for k,v in ANCHOR_POSITIONS.items()},
             track=current_track.to_dict(),
@@ -1137,10 +1280,16 @@ async def handle_client(ws):
 
                 elif mt == 'get_stats':
                     uptime = (datetime.now()-stats['start']).total_seconds()
-                    ts = {t_id: dict(total=t.pkt_total, accepted=t.pkt_accepted,
-                                     rejected=t.pkt_rejected,
-                                     accept_pct=round(t.pkt_accepted/t.pkt_total*100,1),
-                                     last_ranges=t.last_ranges)
+                    ts = {t_id: dict(
+                              total=t.pkt_total, accepted=t.pkt_accepted,
+                              rejected=t.pkt_rejected,
+                              accept_pct=round(t.pkt_accepted/t.pkt_total*100,1),
+                              last_ranges=t.last_ranges,
+                              filter=dict(
+                                  l1_rejects=t._filter.l1_rejects,
+                                  l2_smoothed=t._filter.l2_smoothed,
+                                  l3_updates=t._filter.l3_updates,
+                              ))
                           for t_id, t in tags.items() if t.pkt_total > 0}
                     await ws.send(json.dumps(dict(
                         type="stats", udp_total=stats['udp_total'],
@@ -1186,7 +1335,9 @@ async def stats_reporter():
         for tid, t in tags.items():
             if t.pkt_total > 0:
                 print(f"  Tag{tid}: {t.pkt_accepted}/{t.pkt_total} "
-                      f"({t.pkt_accepted/t.pkt_total*100:.0f}%)")
+                      f"({t.pkt_accepted/t.pkt_total*100:.0f}%)  "
+                      f"L1rej={t._filter.l1_rejects}  "
+                      f"L3upd={t._filter.l3_updates}")
         for i, r in enumerate(race_mgr.get_leaderboard()):
             elp = f"{r['best_elp']:.2f}s" if r['best_elp'] < float('inf') else "—"
             print(f"  {i+1}. {r['car_name']:<8} ELP={elp} Laps={r['laps_done']}")
@@ -1197,7 +1348,6 @@ async def main():
     global event_loop, running
     event_loop = asyncio.get_event_loop()
 
-    # Compute anchor bounding box for display
     ax = [v[0] for v in ANCHOR_POSITIONS.values()]
     ay = [v[1] for v in ANCHOR_POSITIONS.values()]
 
@@ -1206,8 +1356,10 @@ async def main():
     print(f"  UDP={UDP_PORT}  WS={WS_PORT}")
     print(f"  Anchors: {dict(ANCHOR_POSITIONS)}")
     print(f"  Field: {max(ax)-min(ax):.2f}cm × {max(ay)-min(ay):.2f}cm")
-    print(f"  UDP format: A{{id}},AT+RANGE=tid:N,...,range:(...),ancid:(...)")
-    print(f"  Ranges: cm from hardware, internal processing in cm")
+    print(f"  Filtering pipeline:")
+    print(f"    L1 spike rejection  : jump_threshold={JUMP_THRESHOLD_CM}cm")
+    print(f"    L2 rolling median   : window={MEDIAN_WINDOW} packets/anchor")
+    print(f"    L3 Kalman (x,y)     : R={KALMAN_R}  Q={KALMAN_Q}  dt={KALMAN_DT}s")
     print(f"{'═'*60}\n")
 
     threading.Thread(target=udp_receiver, daemon=True, name="UDP").start()
