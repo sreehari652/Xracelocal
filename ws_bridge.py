@@ -1101,8 +1101,10 @@ def udp_receiver():
             data, addr = sock.recvfrom(2048)
             try:
                 sock.sendto(data, ('192.168.29.27', UDP_PORT))
-            except Exception:
-                pass
+                # print(f"[FWD] Forwarded {len(data)}B to 192.168.29.27:{UDP_PORT}")  # uncomment to debug
+            except Exception as fwd_err:
+                if stats['udp_total'] % 50 == 1:
+                    print(f"[FWD] Forward to 192.168.29.27:{UDP_PORT} failed: {fwd_err}")
             stats['udp_total'] += 1
 
             # ── Parse AT+RANGE format ──────────────────────────────────
