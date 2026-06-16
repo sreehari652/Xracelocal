@@ -1911,6 +1911,7 @@
       sendWS({type:'admin_start',group_id:parseInt(currentGroupId),total_laps:currentTotalLaps,tag_map:buildTagMap(),race_config:raceConfig,track_csv:currentTrackCSV,checkpoints_required:CHECKPOINTS_REQUIRED});
       appendFeed([`▶ Group ${currentGroupId} LIVE – ${currentTotalLaps} laps, ${CHECKPOINTS_REQUIRED} CPs/lap`]);
       renderPlayers();
+      pushScreen('counter');
     }
 
     async function doFinish() {
@@ -1997,6 +1998,7 @@
       sendWS({ type: 'reset' });
       Object.keys(tagData).forEach(tid => { tagData[tid].trail = []; tagData[tid].lapInfo = null; });
       cpTouches = {}; renderCpPanel(); resetAllEma();
+      await pushScreen('counter');
       reassignMode = true;
       appendFeed(['↺ Race reset — tags reassigned']);
       renderPlayers();
