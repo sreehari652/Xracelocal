@@ -116,6 +116,27 @@ TAG_TIMEOUT  = 5
 
 checkpoint_touch_history: dict = {}
 
+# ═══════════════════════════════════════════════════════════════════════
+# UDP FORWARDER CONFIG  — add/remove IPs as needed
+# ═══════════════════════════════════════════════════════════════════════
+UDP_FORWARD_PORT = 4210   # port to forward to on each target IP
+UDP_FORWARD_IPS  = [
+    "192.168.29.27",      # ← your machine
+    # "192.168.29.XX",    # add more IPs here
+]
+
+# Internal — do not edit
+_forward_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+
+def forward_udp(data: bytes):
+    """Mirror raw UDP packet to all IPs in UDP_FORWARD_IPS."""
+    for ip in UDP_FORWARD_IPS:
+        try:
+            _forward_sock.sendto(data, (ip, UDP_FORWARD_PORT))
+        except Exception as e:
+            print(f"[FWD] Failed to forward to {ip}:{UDP_FORWARD_PORT} — {e}")
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # THREE-LAYER UWB FILTER  (one instance per tag)
@@ -1095,11 +1116,17 @@ def udp_receiver():
     sock.settimeout(0.1)
     print(f"[UDP] Listening on port {UDP_PORT}")
     print(f"[UDP] Filtering: L1 jump>{JUMP_THRESHOLD_CM}cm | L2 median(w={MEDIAN_WINDOW}) | L3 Kalman(R={KALMAN_R},Q={KALMAN_Q})")
+    if UDP_FORWARD_IPS:
+        print(f"[FWD] Forwarding raw UDP to: {UDP_FORWARD_IPS} on port {UDP_FORWARD_PORT}")
 
     while running:
         try:
             data, addr = sock.recvfrom(2048)
             stats['udp_total'] += 1
+
+            # ── Forward raw packet to all configured IPs ──────────────
+            if UDP_FORWARD_IPS:
+                forward_udp(data)
 
             # ── Parse AT+RANGE format ──────────────────────────────────
             try:
@@ -1361,6 +1388,8 @@ async def main():
     print(f"    L1 spike rejection  : jump_threshold={JUMP_THRESHOLD_CM}cm")
     print(f"    L2 rolling median   : window={MEDIAN_WINDOW} packets/anchor")
     print(f"    L3 Kalman (x,y)     : R={KALMAN_R}  Q={KALMAN_Q}  dt={KALMAN_DT}s")
+    if UDP_FORWARD_IPS:
+        print(f"  UDP forwarding      : {UDP_FORWARD_IPS} → port {UDP_FORWARD_PORT}")
     print(f"{'═'*60}\n")
 
     threading.Thread(target=udp_receiver, daemon=True, name="UDP").start()
