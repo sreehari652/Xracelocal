@@ -51,9 +51,9 @@ LAP_API_URL     = f'{DJANGO_API_BASE}/api/record-lap/'
 # ── Anchor physical positions in CENTIMETRES ──────────────────────────────
 ANCHOR_POSITIONS = {
     0: (0.00, 0.00),
-    1: (610.00, 0.00),
-    2: (610.00, 440.00),
-    3: (0.00, 440.00),
+    1: (720.00, 0.00),
+    2: (720.00, 940.00),
+    3: (0.00, 940.00),
 }
 
 ANCHOR_COUNT = 4
@@ -207,7 +207,7 @@ class UWBFilter:
         self._kf.predict()
         self._kf.update(np.array([[x], [y]]))
         self.l3_updates += 1
-        return float(self._kf.x[0]), float(self._kf.x[1])
+        return float(self._kf.x[0, 0]), float(self._kf.x[1, 0])
 
     # ── Public API ───────────────────────────────────────────────────────
     def filter_ranges(self, raw: list[float]) -> list[float]:
@@ -245,7 +245,7 @@ class UWBFilter:
 # ═══════════════════════════════════════════════════════════════════════
 
 _RE_RANGE = re.compile(
-    r'tid:(\d+).*?range:\(([^)]+)\).*?ancid:\(([^)]+)\)',
+    r'tid:(\d+).*?range:\(([^)]+)\)(?:.*?ancid:\(([^)]+)\))?',
     re.IGNORECASE
 )
 
@@ -257,7 +257,8 @@ def parse_at_range(raw_bytes: bytes):
 
     tag_id    = int(m.group(1))
     range_raw = [float(x.strip()) for x in m.group(2).split(',')]
-    ancid_raw = [int(x.strip())   for x in m.group(3).split(',')]
+    ancid_raw = ([int(x.strip()) for x in m.group(3).split(',')]
+                 if m.group(3) else [])
     ranges_m  = range_raw   # hardware already in cm
     return tag_id, ranges_m, ancid_raw
 

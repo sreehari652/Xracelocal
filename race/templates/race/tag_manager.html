@@ -28,10 +28,8 @@
       padding: 0
     }
 
-    html,
-    body {
-      height: 100%;
-      overflow: hidden
+    html, body {
+      min-height: 100%;
     }
 
     body {
@@ -40,28 +38,29 @@
       font-family: 'Rajdhani', sans-serif;
       font-size: 15px;
       display: flex;
-      flex-direction: column
+      flex-direction: column;
+      overflow-y: auto;
     }
 
     .topbar {
       display: flex;
       align-items: center;
-      gap: 8px;
-      padding: 8px 14px;
+      gap: 10px;
+      padding: 12px 20px;
       background: var(--surface);
       border-bottom: 1px solid var(--border);
       flex-shrink: 0;
       flex-wrap: wrap;
-      min-height: 52px
+      min-height: 60px;
     }
 
     .logo {
-      font-size: 1.3rem;
+      font-size: 1.5rem;
       font-weight: 700;
       letter-spacing: 3px;
       color: var(--accent);
       white-space: nowrap;
-      margin-right: 4px
+      margin-right: 8px;
     }
 
     .logo span {
@@ -69,19 +68,19 @@
     }
 
     .topbar select {
-      padding: 6px 10px;
-      border-radius: 5px;
+      padding: 8px 12px;
+      border-radius: 6px;
       border: 1px solid var(--border);
       background: var(--bg);
       color: var(--text);
       font-family: 'Rajdhani', sans-serif;
-      font-size: .85rem;
+      font-size: .95rem;
       font-weight: 600;
       outline: none;
       cursor: pointer;
-      min-width: 130px;
+      min-width: 150px;
       flex: 1 1 auto;
-      max-width: 220px
+      max-width: 240px;
     }
 
     .topbar select:focus {
@@ -94,18 +93,18 @@
     }
 
     .btn {
-      padding: 7px 13px;
-      border-radius: 5px;
+      padding: 9px 16px;
+      border-radius: 6px;
       border: none;
       font-family: 'Rajdhani', sans-serif;
-      font-size: .8rem;
+      font-size: .85rem;
       font-weight: 700;
       letter-spacing: 1px;
       text-transform: uppercase;
       cursor: pointer;
       transition: all .15s;
       white-space: nowrap;
-      flex-shrink: 0
+      flex-shrink: 0;
     }
 
     .btn:disabled {
@@ -211,13 +210,13 @@
     #dbgBar {
       background: rgba(0, 0, 0, .85);
       border-bottom: 1px solid #1e2a3a;
-      padding: 4px 14px;
+      padding: 6px 20px;
       font-family: 'JetBrains Mono', monospace;
-      font-size: .65rem;
+      font-size: .68rem;
       color: #4a5568;
       flex-shrink: 0;
       display: flex;
-      gap: 16px;
+      gap: 20px;
       flex-wrap: wrap;
     }
 
@@ -248,7 +247,7 @@
       display: flex;
       flex-direction: column;
       font-family: 'JetBrains Mono', monospace;
-      max-height: 160px;
+      max-height: 220px;
       overflow: hidden;
       transition: max-height .25s ease, opacity .25s ease, border-bottom-width .25s;
     }
@@ -389,16 +388,17 @@
     .main {
       display: flex;
       flex: 1;
-      overflow: hidden
+      min-height: 700px;
     }
 
     .cv-wrap {
       flex: 1;
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       justify-content: center;
-      padding: 10px;
-      min-width: 0
+      padding: 16px;
+      min-width: 0;
+      padding-top: 20px;
     }
 
     canvas {
@@ -410,94 +410,97 @@
     }
 
     .side {
-      width: 315px;
+      width: 360px;
       background: var(--surface);
       border-left: 1px solid var(--border);
       display: flex;
       flex-direction: column;
-      overflow: hidden;
-      flex-shrink: 0
+      overflow-y: auto;
+      flex-shrink: 0;
     }
 
+    .side::-webkit-scrollbar { width: 5px; }
+    .side::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
     .side-hdr {
-      padding: 10px 12px;
+      padding: 16px 16px 14px;
       border-bottom: 1px solid var(--border);
-      flex-shrink: 0
+      flex-shrink: 0;
     }
 
     .side-lbl {
-      font-size: .68rem;
+      font-size: .72rem;
       font-weight: 700;
       letter-spacing: 2px;
       text-transform: uppercase;
       color: var(--muted);
-      margin-bottom: 7px
+      margin-bottom: 10px;
     }
 
     .stat-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 5px
+      gap: 8px;
     }
 
     .sbox {
       background: var(--panel);
       border: 1px solid var(--border);
-      border-radius: 5px;
-      padding: 7px 9px
+      border-radius: 7px;
+      padding: 10px 12px;
     }
 
     .sbox .v {
       font-family: 'JetBrains Mono', monospace;
-      font-size: 1.05rem;
+      font-size: 1.2rem;
       font-weight: 600;
       color: var(--accent);
-      line-height: 1
+      line-height: 1;
     }
 
     .sbox .l {
-      font-size: .62rem;
+      font-size: .65rem;
       color: var(--muted);
-      margin-top: 2px;
+      margin-top: 4px;
       text-transform: uppercase;
-      letter-spacing: .5px
+      letter-spacing: .5px;
     }
 
     .col-stats {
       flex-shrink: 0;
       border-bottom: 1px solid var(--border);
-      padding: 8px 12px;
+      padding: 14px 16px;
     }
 
     .col-stats-grid {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
-      gap: 4px;
-      margin-top: 6px;
+      gap: 7px;
+      margin-top: 8px;
     }
 
     .csbox {
       background: var(--panel);
       border: 1px solid var(--border);
-      border-radius: 5px;
-      padding: 5px 7px;
+      border-radius: 7px;
+      padding: 8px 10px;
       text-align: center;
     }
 
     .csbox .cv {
       font-family: 'JetBrains Mono', monospace;
-      font-size: .95rem;
+      font-size: 1.05rem;
       font-weight: 700;
-      line-height: 1
+      line-height: 1;
     }
 
     .csbox .cl {
-      font-size: .54rem;
+      font-size: .57rem;
       color: var(--muted);
-      margin-top: 2px;
+      margin-top: 4px;
       text-transform: uppercase;
       letter-spacing: .5px;
-      line-height: 1.2
+      line-height: 1.2;
     }
 
     .csbox.wall .cv {
@@ -570,28 +573,18 @@
     }
 
     .players-wrap {
-      flex: 1;
-      overflow-y: auto;
-      padding: 10px 12px
-    }
-
-    .players-wrap::-webkit-scrollbar {
-      width: 4px
-    }
-
-    .players-wrap::-webkit-scrollbar-thumb {
-      background: var(--border);
-      border-radius: 2px
+      flex-shrink: 0;
+      padding: 14px 16px;
     }
 
     .pcard {
       background: var(--panel);
       border: 1px solid var(--border);
-      border-left: 3px solid var(--border);
-      border-radius: 6px;
-      padding: 9px 11px;
-      margin-bottom: 7px;
-      transition: border-color .2s
+      border-left: 4px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin-bottom: 12px;
+      transition: border-color .2s;
     }
 
     .pcard.active {
@@ -622,124 +615,125 @@
     }
 
     .pcard-dot {
-      width: 9px;
-      height: 9px;
+      width: 11px;
+      height: 11px;
       border-radius: 50%;
       background: var(--cc, var(--muted));
       flex-shrink: 0;
-      box-shadow: 0 0 6px var(--cc, transparent)
+      box-shadow: 0 0 8px var(--cc, transparent);
     }
 
     .pcard-name {
       font-weight: 700;
-      font-size: .9rem;
-      flex: 1
+      font-size: 1rem;
+      flex: 1;
     }
 
     .pcard-tag {
       font-family: 'JetBrains Mono', monospace;
-      font-size: .68rem;
+      font-size: .72rem;
       background: var(--bg);
       border: 1px solid var(--border);
-      border-radius: 3px;
-      padding: 2px 6px;
-      color: var(--muted)
+      border-radius: 4px;
+      padding: 3px 8px;
+      color: var(--muted);
     }
 
     .pcard-sub {
-      font-size: .72rem;
+      font-size: .75rem;
       color: var(--muted);
-      margin-bottom: 2px
+      margin-bottom: 4px;
     }
 
     .pcard-pos {
       font-family: 'JetBrains Mono', monospace;
-      font-size: .75rem;
+      font-size: .78rem;
       color: var(--green);
-      font-weight: 600
+      font-weight: 600;
+      margin-bottom: 2px;
     }
 
     .pcard-timing {
-      margin-top: 6px;
+      margin-top: 10px;
       background: rgba(0, 0, 0, 0.25);
-      border-radius: 5px;
-      padding: 7px 9px;
-      border: 1px solid rgba(255, 255, 255, 0.06)
+      border-radius: 7px;
+      padding: 10px 12px;
+      border: 1px solid rgba(255, 255, 255, 0.07);
     }
 
     .pcard-timing-row {
       display: flex;
       justify-content: space-between;
       align-items: baseline;
-      margin-bottom: 3px
+      margin-bottom: 6px;
     }
 
     .pcard-timing-row:last-child {
-      margin-bottom: 0
+      margin-bottom: 0;
     }
 
     .pcard-timing-label {
-      font-size: .58rem;
+      font-size: .6rem;
       letter-spacing: 1.5px;
       color: rgba(255, 255, 255, 0.38);
-      text-transform: uppercase
+      text-transform: uppercase;
     }
 
     .pcard-timing-value {
       font-family: 'JetBrains Mono', monospace;
-      font-size: .95rem;
+      font-size: 1.05rem;
       font-weight: 700;
-      color: #fff
+      color: #fff;
     }
 
     .pcard-timing-value.running {
-      color: var(--accent)
+      color: var(--accent);
     }
 
     .pcard-timing-value.best {
-      color: #ffd700
+      color: #ffd700;
     }
 
     .pcard-timing-value.no-data {
       color: rgba(255, 255, 255, 0.25);
-      font-size: .72rem
+      font-size: .75rem;
     }
 
     .pcard-cp-row {
       display: flex;
       align-items: center;
-      gap: 3px;
-      margin-top: 5px;
-      padding-top: 5px;
-      border-top: 1px solid rgba(255, 255, 255, 0.06)
+      gap: 4px;
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
     }
 
     .tag-row {
-      margin-top: 5px
+      margin-top: 8px;
     }
 
     .tag-inp {
       width: 100%;
-      padding: 5px 8px;
-      border-radius: 4px;
+      padding: 8px 10px;
+      border-radius: 5px;
       border: 1px solid var(--border);
       background: var(--bg);
       color: var(--text);
       font-family: 'JetBrains Mono', monospace;
-      font-size: .8rem;
-      outline: none
+      font-size: .85rem;
+      outline: none;
     }
 
     .tag-inp:focus {
-      border-color: var(--accent)
+      border-color: var(--accent);
     }
 
     .tag-hint {
-      font-size: .65rem;
+      font-size: .68rem;
       color: var(--muted);
-      margin-top: 2px;
+      margin-top: 4px;
       text-align: right;
-      min-height: 14px
+      min-height: 16px;
     }
 
     .tag-hint.ok {
@@ -763,11 +757,11 @@
     }
 
     .feed-wrap {
-      padding: 8px 12px;
+      padding: 12px 16px;
       border-top: 1px solid var(--border);
       flex-shrink: 0;
-      max-height: 90px;
-      overflow-y: auto
+      max-height: 130px;
+      overflow-y: auto;
     }
 
     .feed-wrap::-webkit-scrollbar {
@@ -780,13 +774,13 @@
 
     .feed-item {
       font-family: 'JetBrains Mono', monospace;
-      font-size: .62rem;
+      font-size: .68rem;
       color: var(--muted);
-      padding: 2px 0;
+      padding: 3px 0;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      border-bottom: 1px solid rgba(255, 255, 255, .03)
+      border-bottom: 1px solid rgba(255, 255, 255, .03);
     }
 
     .feed-item.hi {
@@ -796,9 +790,7 @@
     #cpPanel {
       flex-shrink: 0;
       border-top: 1px solid var(--border);
-      padding: 8px 12px 10px;
-      max-height: 180px;
-      overflow-y: auto;
+      padding: 14px 16px 16px;
     }
 
     #cpPanel::-webkit-scrollbar {
@@ -813,8 +805,8 @@
     .cp-row {
       display: flex;
       align-items: center;
-      gap: 6px;
-      padding: 3px 0;
+      gap: 8px;
+      padding: 5px 0;
       border-bottom: 1px solid rgba(255, 255, 255, .04);
     }
 
@@ -876,6 +868,128 @@
         border-top: 1px solid var(--border)
       }
     }
+
+    /* ── Tag Assignment Modal ───────────────────────────────── */
+    #tagModal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 9000;
+      background: rgba(0,0,0,0.75);
+      backdrop-filter: blur(4px);
+      align-items: center;
+      justify-content: center;
+    }
+    #tagModal.open { display: flex; }
+    #tagModalBox {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      width: 480px;
+      max-width: 95vw;
+      max-height: 85vh;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 8px 48px rgba(0,0,0,0.7);
+    }
+    #tagModalHeader {
+      padding: 20px 24px 16px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    #tagModalHeader h2 {
+      font-size: 1.1rem;
+      font-weight: 700;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--yellow);
+      margin-bottom: 4px;
+    }
+    #tagModalHeader p {
+      font-size: .78rem;
+      color: var(--muted);
+    }
+    #tagModalBody {
+      padding: 16px 24px;
+      overflow-y: auto;
+      flex: 1;
+    }
+    #tagModalBody::-webkit-scrollbar { width: 4px; }
+    #tagModalBody::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+    .tag-assign-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .tag-assign-row:last-child { border-bottom: none; }
+    .tag-assign-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .tag-assign-name {
+      flex: 1;
+      font-weight: 700;
+      font-size: .95rem;
+    }
+    .tag-assign-status {
+      font-size: .7rem;
+      color: var(--muted);
+    }
+    .tag-assign-inp {
+      width: 110px;
+      padding: 8px 10px;
+      border-radius: 5px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: .88rem;
+      text-align: center;
+      outline: none;
+      flex-shrink: 0;
+    }
+    .tag-assign-inp:focus { border-color: var(--accent); }
+    .tag-assign-inp.has-val { border-color: rgba(0,255,136,0.5); color: var(--green); }
+    #tagModalFooter {
+      padding: 16px 24px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+      flex-shrink: 0;
+    }
+    .btn-modal-cancel {
+      padding: 10px 20px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--muted);
+      font-family: 'Rajdhani', sans-serif;
+      font-size: .85rem;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+    .btn-modal-cancel:hover { background: rgba(255,255,255,0.05); color: var(--text); }
+    .btn-modal-confirm {
+      padding: 10px 24px;
+      border-radius: 6px;
+      border: none;
+      background: var(--yellow);
+      color: #000;
+      font-family: 'Rajdhani', sans-serif;
+      font-size: .85rem;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+    .btn-modal-confirm:hover { background: #e6c200; }
   </style>
 </head>
 
@@ -1047,17 +1161,17 @@
         </div>
       </div>
 
-      <div class="side-lbl" style="padding:10px 12px 0;flex-shrink:0">Players &amp; Tags</div>
+      <div class="side-lbl" style="padding:14px 16px 0;flex-shrink:0">Players &amp; Tags</div>
       <div class="players-wrap" id="players"><p class="ph">Select a group</p></div>
       <div class="feed-wrap" id="feed"></div>
 
       <div id="cpPanel">
-        <div class="side-lbl" style="margin-bottom:6px;">Checkpoint Status</div>
+        <div class="side-lbl" style="margin-bottom:8px;">Checkpoint Status</div>
         <div id="cpRows"><span class="cp-empty">No race data</span></div>
       </div>
 
-      <div id="lbWrap" style="flex-shrink:0;border-top:1px solid var(--border);padding:8px 12px 10px;">
-        <div class="side-lbl" style="margin-bottom:6px;">Best Lap Rankings</div>
+      <div id="lbWrap" style="flex-shrink:0;border-top:1px solid var(--border);padding:14px 16px 16px;">
+        <div class="side-lbl" style="margin-bottom:10px;">Best Lap Rankings</div>
         <div id="lbRows"></div>
       </div>
     </div>
@@ -1083,9 +1197,9 @@
 
     const ANC = [
       { x: 0,   y: 0   },
-      { x: 610, y: 0   },
-      { x: 610, y: 440 },
-      { x: 0,   y: 440 },
+      { x: 720, y: 0   },
+      { x: 720, y: 940 },
+      { x: 0,   y: 940 },
     ];
 
     const COLORS = ['#00d4ff','#ff3b5c','#00ff88','#ffd700','#a855f7','#ff6b35','#00ffcc','#ff9ff3'];
@@ -1770,10 +1884,83 @@
     }
 
     function doRestart() {
-      if (!currentGroupId) return; if (!confirm('Reset race data?')) return;
-      sendWS({type:'reset'}); Object.keys(tagData).forEach(tid=>{tagData[tid].trail=[];tagData[tid].lapInfo=null;});
-      cpTouches={}; renderCpPanel(); resetAllEma();   // ← reset EMA on restart too
-      reassignMode=true; appendFeed(['↺ Race reset']); renderPlayers(); updateButtons();
+      if (!currentGroupId) return;
+      openTagModal();
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // TAG ASSIGNMENT MODAL
+    // ═══════════════════════════════════════════════════════════
+    function openTagModal() {
+      const body = document.getElementById('tagModalBody');
+      if (!players.length) { alert('No players loaded.'); return; }
+      body.innerHTML = players.map((p, idx) => {
+        const color = COLORS[idx % COLORS.length];
+        const tid = (p.tag_id !== null && p.tag_id !== undefined) ? p.tag_id : '';
+        return `<div class="tag-assign-row">
+          <div class="tag-assign-dot" style="background:${color};box-shadow:0 0 6px ${color}"></div>
+          <div>
+            <div class="tag-assign-name" style="color:${color}">${p.player_name}</div>
+            <div class="tag-assign-status">${p.player_status || 'Player'}</div>
+          </div>
+          <input
+            class="tag-assign-inp ${tid !== '' ? 'has-val' : ''}"
+            type="number"
+            min="0"
+            max="9"
+            placeholder="Tag #"
+            value="${tid}"
+            data-gp="${p.gp_id}"
+            data-idx="${idx}"
+            oninput="onTagModalInput(this)"
+          />
+        </div>`;
+      }).join('');
+      document.getElementById('tagModal').classList.add('open');
+    }
+
+    function closeTagModal() {
+      document.getElementById('tagModal').classList.remove('open');
+    }
+
+    function onTagModalInput(input) {
+      const v = input.value.trim();
+      input.classList.toggle('has-val', v !== '');
+    }
+
+    async function confirmTagsAndRestart() {
+      if (!confirm('Save tag assignments and restart race?')) return;
+
+      // Save all tag inputs
+      const inputs = document.querySelectorAll('.tag-assign-inp');
+      const savePromises = [];
+      inputs.forEach(inp => {
+        const gpId = inp.dataset.gp;
+        const rawId = inp.value.trim();
+        const player = players.find(p => String(p.gp_id) === String(gpId));
+        if (player) {
+          player.tag_id = rawId ? parseInt(rawId, 10) : null;
+        }
+        savePromises.push(apiPatch(API.updateTag, { gp_id: gpId, tag_id: rawId || null }));
+      });
+
+      try {
+        await Promise.all(savePromises);
+      } catch(e) {
+        console.warn('[TagModal] Some saves failed:', e);
+      }
+
+      closeTagModal();
+
+      // Now do the actual reset
+      sendWS({ type: 'reset' });
+      Object.keys(tagData).forEach(tid => { tagData[tid].trail = []; tagData[tid].lapInfo = null; });
+      cpTouches = {}; renderCpPanel(); resetAllEma();
+      reassignMode = true;
+      appendFeed(['↺ Race reset — tags reassigned']);
+      renderPlayers();
+      updateButtons();
+      refreshDebugBar();
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -1896,5 +2083,22 @@
     loadTournaments();
     console.log('[XRace] ready — 4-layer filter: L1 spike|L2 median|L3 Kalman (Python) + L4 EMA α='+EMA_ALPHA+' (JS canvas)');
   </script>
+  <!-- ── Tag Assignment Modal ─────────────────────────────── -->
+  <div id="tagModal">
+    <div id="tagModalBox">
+      <div id="tagModalHeader">
+        <h2>↺ Assign Tags to Players</h2>
+        <p>Enter the UWB tag ID for each player before restarting the race.</p>
+      </div>
+      <div id="tagModalBody">
+        <!-- rows injected by JS -->
+      </div>
+      <div id="tagModalFooter">
+        <button class="btn-modal-cancel" onclick="closeTagModal()">Cancel</button>
+        <button class="btn-modal-confirm" onclick="confirmTagsAndRestart()">▶ Save & Restart Race</button>
+      </div>
+    </div>
+  </div>
+
 </body>
 </html>
