@@ -85,17 +85,40 @@ class RaceTrackConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             print(f"[WS Receive Error]: {e}")
 
-    # Handler for pushing the ScreenData to the public display
+    # # Handler for pushing the ScreenData to the public display
+    # async def push_screen_update(self, event):
+    #     await self.send(json.dumps({
+    #         "type": "screen_update", 
+    #         "data": event["payload"]
+    #     }))
+
+    # # Handler for generic echoes
+    # async def generic_echo(self, event):
+    #     await self.send(json.dumps(event["payload"]))
+
+    # # Called when udp_listener pushes data
+    # async def tag_update(self, event):
+    #     await self.send(json.dumps(event["data"]))
+
+    
+        # ── Channel layer handlers (called by group_send) ──────────────────
+
+    # ← THIS WAS MISSING — broadcast_screen view calls group_send with type "broadcast_message"
+    # Django Channels maps "broadcast_message" → method "broadcast_message"
+    async def broadcast_message(self, event):
+        await self.send(json.dumps({
+            "type": "screen_update",
+            "data": event["data"]
+        }))
+
     async def push_screen_update(self, event):
         await self.send(json.dumps({
-            "type": "screen_update", 
+            "type": "screen_update",
             "data": event["payload"]
         }))
 
-    # Handler for generic echoes
     async def generic_echo(self, event):
         await self.send(json.dumps(event["payload"]))
 
-    # Called when udp_listener pushes data
     async def tag_update(self, event):
         await self.send(json.dumps(event["data"]))
