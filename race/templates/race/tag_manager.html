@@ -1895,7 +1895,7 @@
         }
 
         // ── Step 2: Forward screen_data to local broadcast server ──────────
-        const broadcastResp = await fetch('http://localhost:8001/broadcast-screen/', {
+        const broadcastResp = await fetch('http://localhost:8000/broadcast-screen/', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(dataResult.screen_data)

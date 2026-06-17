@@ -5,4 +5,5 @@ from django.urls import re_path
 websocket_urlpatterns = [
     re_path(r'ws/race/$', RaceTrackConsumer.as_asgi()),
     re_path(r'^$', RaceTrackConsumer.as_asgi()),
+    re_path(r"ws/screen/$", ScreenConsumer.as_asgi()),
 ]
