@@ -1769,23 +1769,20 @@
       if (!td) return;
       function n(arr) { if (!arr||!arr.length) return []; return arr.map(p=>Array.isArray(p)?p:[p.x,p.y]); }
       let ctr=n(td.center),inn=n(td.inner),out=n(td.outer);
-      ctr = ctr.map(pt => [pt[0]*100, pt[1]*100]);
-      inn = inn.map(pt => [pt[0]*100, pt[1]*100]);
-      out = out.map(pt => [pt[0]*100, pt[1]*100]);
       if (ctr.length>2) liveTrack.center=ctr; if (inn.length>2) liveTrack.inner=inn; if (out.length>2) liveTrack.outer=out;
       if (td.checkpoints&&td.checkpoints.length) {
         liveTrack.checkpoints = td.checkpoints.map(cp => ({
           id: cp.id,
-          x: cp.x * 100,
-          y: cp.y * 100,
-          r: cp.r * 100
+          x: cp.x,
+          y: cp.y,
+          r: cp.r
         }));
       }
       if (td.start_finish) {
         liveTrack.start_finish = {
-          x: td.start_finish.x * 100,
-          y1: td.start_finish.y1 * 100,
-          y2: td.start_finish.y2 * 100,
+          x: td.start_finish.x,
+          y1: td.start_finish.y1,
+          y2: td.start_finish.y2,
           dir: td.start_finish.dir
         };
       }
@@ -2071,12 +2068,15 @@
 
       closeTagModal();
 
-      // Now do the actual reset
+      // Reset engines, THEN re-arm with the track CSV + new tag map.
+      // (A bare 'reset' alone never loads track_csv on the bridge side,
+      // so START_LINE_X/CHECKPOINTS would stay stuck on hardcoded defaults.)
       sendWS({ type: 'reset' });
-      Object.keys(tagData).forEach(tid => { tagData[tid].trail = []; tagData[tid].lapInfo = null; });
       cpTouches = {}; renderCpPanel(); resetAllEma();
-      reassignMode = true;
-      appendFeed(['↺ Race reset — tags reassigned']);
+      sendWS({type:'admin_start',group_id:parseInt(currentGroupId),total_laps:currentTotalLaps,tag_map:buildTagMap(),race_config:raceConfig,track_csv:currentTrackCSV,checkpoints_required:CHECKPOINTS_REQUIRED});
+      Object.keys(tagData).forEach(tid => { tagData[tid].trail = []; tagData[tid].lapInfo = null; tagData[tid].lapStartTime = null; });
+      currentGroupStatus = 'live'; reassignMode = false; setBadge('live');
+      appendFeed(['▶ Race restarted — tags reassigned, track reloaded, LIVE']);
       renderPlayers();
       updateButtons();
       refreshDebugBar();
@@ -2112,13 +2112,15 @@
         else if (currentGroupStatus==='live'&&!reassignMode&&!isNaN(tid)) posLine=`<div class="pcard-sub" style="color:#fbbf24">Waiting for signal…</div>`;
         let lapLine='';
         if (d?.lapInfo?.is_racing) {
-          const li=d.lapInfo,cpHit=li.checkpoints_hit||0,cpTotal=CHECKPOINTS_REQUIRED;
+          const li=d.lapInfo,cpHit=li.checkpoints_hit||0,cpTotal=li.checkpoints_total||CHECKPOINTS_REQUIRED;
           const lb=liveLeaderboard.find(r=>r.car_id===tid),bestElp=(lb&&lb.best_elp<1e9)?lb.best_elp:null;
           const wH=d.wallHits||0,cH=d.carHits||0,penTot=lb?.penalty_total??0,bonTot=lb?.bonus_total??0;
           let colRow='';
           if (wH>0||cH>0||penTot>0||bonTot>0) { colRow='<div class="pcard-col-row">'; if(wH>0)colRow+=`<span class="col-chip cc-wall">🚧 ${wH}×wall</span>`; if(cH>0)colRow+=`<span class="col-chip cc-car">💥 ${cH}×hit</span>`; if(penTot>0)colRow+=`<span class="col-chip cc-pen">+${penTot.toFixed(1)}s</span>`; if(bonTot>0)colRow+=`<span class="col-chip cc-bon">-${bonTot.toFixed(1)}s</span>`; colRow+='</div>'; }
           const cpPips=Array.from({length:cpTotal},(_,i)=>{const done=i<cpHit,next=i===cpHit,col=done?'#00ff88':(next?'#ffd700':'rgba(255,255,255,0.12)'),brd=done?'#00ff88':(next?'#ffd700':'rgba(255,255,255,0.2)');return `<span title="CP${i}" style="display:inline-block;width:11px;height:11px;border-radius:50%;background:${col};border:1.5px solid ${brd};transition:background .3s;"></span>`;}).join('');
-          lapLine=`<div class="pcard-timing"><div class="pcard-timing-row"><span class="pcard-timing-label">LAP ${li.current_lap} / ${li.total_laps}</span><span class="pcard-timing-label" style="color:rgba(255,255,255,.2)">CURRENT</span></div><div class="pcard-timing-row"><span class="pcard-timing-value running lap-timer" data-tag="${tid}">0.00</span></div><div class="pcard-timing-row" style="margin-top:5px;padding-top:5px;border-top:1px solid rgba(255,255,255,.06)"><span class="pcard-timing-label">BEST LAP</span>${bestElp!=null?`<span class="pcard-timing-value best" id="best-${tid}">${fmtLapTime(bestElp)}</span>`:`<span class="pcard-timing-value no-data" id="best-${tid}">—</span>`}</div><div class="pcard-cp-row"><span style="font-size:.55rem;letter-spacing:1px;color:rgba(255,255,255,.3);margin-right:4px;">CP</span>${cpPips}<span style="font-size:.58rem;color:${cpHit>=cpTotal?'#00ff88':'rgba(255,255,255,.3)'};margin-left:4px;font-weight:700;">${cpHit}/${cpTotal}</span></div>${colRow}</div>`;
+          const cpColor=cpHit>=cpTotal?'#00ff88':(cpHit>0?'#ffd700':'rgba(255,255,255,0.35)');
+          const cpTagLabel=`Tag ${!isNaN(tid)?tid:'?'} — ${cpHit}/${cpTotal} checkpoint${cpTotal!==1?'s':''}`;
+          lapLine=`<div class="pcard-timing"><div class="pcard-timing-row"><span class="pcard-timing-label">LAP ${li.current_lap} / ${li.total_laps}</span><span class="pcard-timing-label" style="color:rgba(255,255,255,.2)">CURRENT</span></div><div class="pcard-timing-row"><span class="pcard-timing-value running lap-timer" data-tag="${tid}">0.00</span></div><div class="pcard-timing-row" style="margin-top:5px;padding-top:5px;border-top:1px solid rgba(255,255,255,.06)"><span class="pcard-timing-label">BEST LAP</span>${bestElp!=null?`<span class="pcard-timing-value best" id="best-${tid}">${fmtLapTime(bestElp)}</span>`:`<span class="pcard-timing-value no-data" id="best-${tid}">—</span>`}</div><div class="pcard-cp-row"><span style="font-size:.55rem;letter-spacing:1px;color:rgba(255,255,255,.3);margin-right:4px;">CP</span>${cpPips}<span style="font-size:.58rem;color:${cpHit>=cpTotal?'#00ff88':'rgba(255,255,255,.3)'};margin-left:4px;font-weight:700;">${cpHit}/${cpTotal}</span></div><div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,.06);font-family:'JetBrains Mono',monospace;font-size:.68rem;font-weight:700;color:${cpColor};letter-spacing:.3px;">${cpTagLabel}${cpHit>=cpTotal?' ✓':''}</div>${colRow}</div>`;
         } else if (d?.lapInfo?.race_finished) {
           const lb=liveLeaderboard.find(r=>r.car_id===tid),bestElp=(lb&&lb.best_elp<1e9)?lb.best_elp:null;
           const wH=d.wallHits||0,cH=d.carHits||0;
