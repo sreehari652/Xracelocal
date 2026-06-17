@@ -1838,7 +1838,7 @@
       try { const r=await fetch(API.list); const {data}=await r.json(); (data||[]).forEach(t=>{_tournamentIdCache[t.slug]=t.id;}); return _tournamentIdCache[slug]||null; } catch(e){return null;}
     }
 
-    async function pushScreen(screenType) {
+    {% comment %} async function pushScreen(screenType) {
       const slug=getCurrentTournamentSlug();
       if (!slug) { showWallToast('⚠ Select a tournament first','warn'); return; }
       const tournamentId=await getTournamentId(slug);
@@ -1854,6 +1854,83 @@
         setActiveWallBtn(screenType); showWallToast(`✓ Live wall → ${screenType.toUpperCase()}`,'ok'); updateWallStatus(screenType,true);
       } catch(e) { showWallToast('✗ Error: '+e.message,'err'); updateWallStatus(screenType,false); }
       finally { if (btn) { btn.classList.remove('sending'); btn.disabled=false; } }
+    } {% endcomment %}
+
+  async function pushScreen(screenType) {
+      const slug = getCurrentTournamentSlug();
+      if (!slug) { showWallToast('⚠ Select a tournament first', 'warn'); return; }
+
+      const tournamentId = await getTournamentId(slug);
+      if (!tournamentId) { showWallToast('⚠ Could not resolve tournament ID', 'warn'); return; }
+
+      const btn = document.getElementById('wbtn-' + screenType);
+      if (btn) { btn.classList.add('sending'); btn.disabled = true; }
+
+      try {
+        // ── Step 1: Build screen_data from hosted backend ──────────────────
+        const dataResp = await fetch(BACKEND_BASE + '/api/push-live-screen/', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': getCSRF()
+          },
+          body: JSON.stringify({
+            tournament_id: tournamentId,
+            display_screen: screenType
+          })
+        });
+
+        if (!dataResp.ok) {
+          showWallToast(`✗ Backend error ${dataResp.status}`, 'err');
+          updateWallStatus(screenType, false);
+          return;
+        }
+
+        const dataResult = await dataResp.json();
+
+        if (!dataResult.success || !dataResult.screen_data) {
+          showWallToast('✗ Backend returned no screen_data', 'err');
+          updateWallStatus(screenType, false);
+          return;
+        }
+
+        // ── Step 2: Forward screen_data to local broadcast server ──────────
+        const broadcastResp = await fetch('http://localhost:8001/broadcast-screen/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(dataResult.screen_data)
+        });
+
+        if (!broadcastResp.ok) {
+          showWallToast(`✗ Local server error ${broadcastResp.status}`, 'err');
+          updateWallStatus(screenType, false);
+          return;
+        }
+
+        const broadcastResult = await broadcastResp.json();
+
+        if (!broadcastResult.success) {
+          showWallToast('✗ Broadcast failed', 'err');
+          updateWallStatus(screenType, false);
+          return;
+        }
+
+        // ── Step 3: Success ────────────────────────────────────────────────
+        setActiveWallBtn(screenType);
+        showWallToast(`✓ Live wall → ${screenType.toUpperCase()}`, 'ok');
+        updateWallStatus(screenType, true);
+
+      } catch (e) {
+        // Differentiate between backend unreachable vs local server unreachable
+        const msg = e.message.includes('localhost')
+          ? '✗ Local server unreachable'
+          : '✗ Error: ' + e.message;
+        showWallToast(msg, 'err');
+        updateWallStatus(screenType, false);
+
+      } finally {
+        if (btn) { btn.classList.remove('sending'); btn.disabled = false; }
+      }
     }
 
     function setActiveWallBtn(t) { document.querySelectorAll('.btn-wall').forEach(b=>b.classList.remove('active')); const btn=document.getElementById('wbtn-'+t); if (btn) btn.classList.add('active'); }
@@ -1998,7 +2075,6 @@
       sendWS({ type: 'reset' });
       Object.keys(tagData).forEach(tid => { tagData[tid].trail = []; tagData[tid].lapInfo = null; });
       cpTouches = {}; renderCpPanel(); resetAllEma();
-      await pushScreen('counter');
       reassignMode = true;
       appendFeed(['↺ Race reset — tags reassigned']);
       renderPlayers();
