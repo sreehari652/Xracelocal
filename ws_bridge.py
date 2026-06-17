@@ -296,6 +296,12 @@ class TrackData:
 
 
 def parse_track_csv(csv_text: str) -> TrackData:
+    """CSV coordinates are stored in METRES. Tag positions used throughout the
+    rest of this module (CHECKPOINTS, START_LINE_*, live x/y from hardware)
+    are in CENTIMETRES — matching the frontend, which does the same *100
+    conversion (see parseCsvIntoLiveTrack / applyLiveTrack in tag_manager.html).
+    """
+    M_TO_CM = 100.0
     td = TrackData()
     cp_dict: dict = {}
 
@@ -309,14 +315,14 @@ def parse_track_csv(csv_text: str) -> TrackData:
         kind = parts[0].upper()
         try:
             if kind == 'CENTER' and len(parts) >= 3:
-                td.center.append((float(parts[1]), float(parts[2])))
+                td.center.append((float(parts[1]) * M_TO_CM, float(parts[2]) * M_TO_CM))
             elif kind == 'INNER' and len(parts) >= 3:
-                td.inner.append((float(parts[1]), float(parts[2])))
+                td.inner.append((float(parts[1]) * M_TO_CM, float(parts[2]) * M_TO_CM))
             elif kind == 'OUTER' and len(parts) >= 3:
-                td.outer.append((float(parts[1]), float(parts[2])))
+                td.outer.append((float(parts[1]) * M_TO_CM, float(parts[2]) * M_TO_CM))
             elif kind == 'START_FINISH' and len(parts) >= 5:
-                x1, y1_sf = float(parts[1]), float(parts[2])
-                x2, y2_sf = float(parts[3]), float(parts[4])
+                x1, y1_sf = float(parts[1]) * M_TO_CM, float(parts[2]) * M_TO_CM
+                x2, y2_sf = float(parts[3]) * M_TO_CM, float(parts[4]) * M_TO_CM
                 td.sf_x  = (x1 + x2) / 2
                 td.sf_y1 = min(y1_sf, y2_sf)
                 td.sf_y2 = max(y1_sf, y2_sf)
@@ -324,7 +330,7 @@ def parse_track_csv(csv_text: str) -> TrackData:
                     td.sf_dir = parts[5].lower().strip()
             elif kind == 'CHECKPOINT' and len(parts) >= 5:
                 cp_id = int(parts[1])
-                x, y, r = float(parts[2]), float(parts[3]), float(parts[4])
+                x, y, r = float(parts[2]) * M_TO_CM, float(parts[3]) * M_TO_CM, float(parts[4]) * M_TO_CM
                 cp_dict[cp_id] = (x, y, r)
         except (ValueError, IndexError) as e:
             print(f"[CSV] Parse warning on '{line}': {e}")
@@ -750,20 +756,31 @@ class LapEngine:
 
     def _check_sf_line(self, x, y, now):
         tol = LINE_CROSS_TOLERANCE
-        if   x < START_LINE_X - tol: new_side = 'left'
-        elif x > START_LINE_X + tol: new_side = 'right'
-        else: return None
+        new_side = 'left' if x < START_LINE_X else 'right'
 
         if self._sf_side is None:
-            self._sf_side = new_side; return None
+            self._sf_side = new_side
+            print(f"[SF-DEBUG] {self.car_name} init side={new_side} x={x:.3f} START_LINE_X={START_LINE_X:.3f}")
+            return None
 
-        prev_side = self._sf_side; self._sf_side = new_side
+        prev_side = self._sf_side
+        if new_side != prev_side and abs(x - START_LINE_X) < tol:
+            return None
+        self._sf_side = new_side
+
+        if new_side == prev_side:
+            return None
+
         crossing = ((prev_side=='right' and new_side=='left')  if SF_CROSSING_DIR=='right_to_left'
                     else (prev_side=='left' and new_side=='right'))
 
+        print(f"[SF-DEBUG] {self.car_name} side {prev_side}->{new_side} x={x:.3f} y={y:.3f} "
+              f"crossing={crossing} on_line={self._on_line(y)} dir={SF_CROSSING_DIR}")
+
         if not crossing: return None
         if not self._on_line(y):
-            print(f"[SF] {self.car_name} crossed but y={y:.3f}cm outside Y range — ignored")
+            print(f"[SF] {self.car_name} crossed but y={y:.3f}cm outside Y range "
+                  f"[{START_LINE_Y1 - LINE_Y_TOLERANCE:.1f}..{START_LINE_Y2 + LINE_Y_TOLERANCE:.1f}] — ignored")
             return None
         if now - self._last_cross < MIN_LAP_TIME:
             print(f"[SF] {self.car_name} debounce — ignored")
