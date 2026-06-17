@@ -1985,10 +1985,11 @@
       const opt=document.getElementById('gSel').options[document.getElementById('gSel').selectedIndex];
       opt.dataset.status='live'; opt.textContent=opt.textContent.replace(/\s*\[.*?\]\s*$/,'')+' [live]';
       cpTouches={}; renderCpPanel(); resetAllEma();   // ← reset EMA on new race start
+      await pushScreen('counter');
       sendWS({type:'admin_start',group_id:parseInt(currentGroupId),total_laps:currentTotalLaps,tag_map:buildTagMap(),race_config:raceConfig,track_csv:currentTrackCSV,checkpoints_required:CHECKPOINTS_REQUIRED});
       appendFeed([`▶ Group ${currentGroupId} LIVE – ${currentTotalLaps} laps, ${CHECKPOINTS_REQUIRED} CPs/lap`]);
       renderPlayers();
-      pushScreen('counter');
+     
     }
 
     async function doFinish() {
@@ -2005,7 +2006,7 @@
     function doRestart() {
       if (!currentGroupId) return;
       openTagModal();
-      pushScreen('counter');
+      
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -2071,13 +2072,14 @@
       }
 
       closeTagModal();
-      pushScreen('counter');
+      
 
       // Reset engines, THEN re-arm with the track CSV + new tag map.
       // (A bare 'reset' alone never loads track_csv on the bridge side,
       // so START_LINE_X/CHECKPOINTS would stay stuck on hardcoded defaults.)
       sendWS({ type: 'reset' });
       cpTouches = {}; renderCpPanel(); resetAllEma();
+      await pushScreen('counter');
       sendWS({type:'admin_start',group_id:parseInt(currentGroupId),total_laps:currentTotalLaps,tag_map:buildTagMap(),race_config:raceConfig,track_csv:currentTrackCSV,checkpoints_required:CHECKPOINTS_REQUIRED});
       Object.keys(tagData).forEach(tid => { tagData[tid].trail = []; tagData[tid].lapInfo = null; tagData[tid].lapStartTime = null; });
       currentGroupStatus = 'live'; reassignMode = false; setBadge('live');
