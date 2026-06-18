@@ -100,7 +100,7 @@ class RaceTrackConsumer(AsyncWebsocketConsumer):
     # async def tag_update(self, event):
     #     await self.send(json.dumps(event["data"]))
 
-    
+
         # ── Channel layer handlers (called by group_send) ──────────────────
 
     # ← THIS WAS MISSING — broadcast_screen view calls group_send with type "broadcast_message"
@@ -122,3 +122,26 @@ class RaceTrackConsumer(AsyncWebsocketConsumer):
 
     async def tag_update(self, event):
         await self.send(json.dumps(event["data"]))
+
+
+
+class ScreenConsumer(AsyncWebsocketConsumer):
+
+    async def connect(self):
+        await self.channel_layer.group_add(
+            "screen_updates",
+            self.channel_name
+        )
+        await self.accept()
+
+    async def disconnect(self, close_code):
+        await self.channel_layer.group_discard(
+            "screen_updates",
+            self.channel_name
+        )
+
+    async def screen_update(self, event):
+        await self.send(json.dumps({
+            "type": "screen_update",
+            "data": event["payload"]
+        }))

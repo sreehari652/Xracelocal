@@ -91,10 +91,10 @@ def broadcast_screen(request):
     try:
         channel_layer = get_channel_layer()
         async_to_sync(channel_layer.group_send)(
-            "race_track",
+            "screen_updates",
             {
-                "type": "broadcast_message",
-                "data": data,
+                "type": "screen_update",
+                "payload": data,
             }
         )
     except Exception as e:
