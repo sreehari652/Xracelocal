@@ -31,13 +31,57 @@ from collections import defaultdict, deque
 import statistics
 
 # ═══════════════════════════════════════════════════════════════════════
-# FILTERING CONSTANTS  (medium-aggression tuning)
+# FILTERING CONSTANTS  (tuned to match the actual Arduino firmware timing)
 # ═══════════════════════════════════════════════════════════════════════
-JUMP_THRESHOLD_CM = 500.0   # L1: reject per-anchor jump larger than this
-MEDIAN_WINDOW     = 5       # L2: rolling median window per anchor
-KALMAN_R          = 40.0    # L3: measurement noise covariance
-KALMAN_Q          = 0.08    # L3: process noise covariance
-KALMAN_DT         = 0.04    # L3: expected dt (matches ~25 Hz UWB update rate)
+# Hardware cadence reference (from esp32s3_at_a0.ino / esp32s3_at_t0.ino):
+#   AT+SETCAP=<UWB_TAG_COUNT>,10,1  → 10ms time-slot per tag, AT+SETRPT=1
+#   means each anchor completes one full ranging round (all tags) every
+#   UWB_TAG_COUNT * 10ms and reports immediately (no batching). With
+#   UWB_TAG_COUNT=3 that's a ~30ms cycle per anchor → ~33Hz per anchor.
+#   Four anchors writing to the same UDP port independently means actual
+#   packet arrival at the bridge is irregular (anywhere from <5ms to
+#   ~100ms+ apart) even though the underlying hardware cadence is steady.
+#   KALMAN_DT below is only a fallback/seed value — the real dt used at
+#   runtime is measured per-packet (see UWBFilter._l3) so prediction
+#   accuracy doesn't degrade when packets arrive irregularly.
+HARDWARE_SLOT_MS  = 10.0    # AT+SETCAP slot length, must match firmware
+EXPECTED_TAG_SLOTS = 3      # AT+SETCAP tag count, must match firmware
+EXPECTED_CYCLE_MS  = HARDWARE_SLOT_MS * EXPECTED_TAG_SLOTS   # ~30ms/anchor
+
+JUMP_THRESHOLD_CM = 150.0   # L1: reject per-anchor jump larger than this.
+                             # Real hardware noise between consecutive
+                             # readings for the same anchor is ~0-40cm
+                             # (measured from field logs); genuine
+                             # multipath/NLOS spikes are 300cm+. 150cm
+                             # comfortably separates the two.
+MEDIAN_WINDOW     = 9       # L2: rolling median window per anchor —
+                             # widened from 5 → 9 (≈270ms of history at
+                             # the hardware's ~30ms/anchor cycle) for
+                             # heavier smoothing of per-anchor range
+                             # noise before it ever reaches trilateration
+                             # or the Kalman stage. Lag tradeoff accepted
+                             # since flicker reduction was prioritized.
+KALMAN_R          = 30.0    # L3: measurement noise covariance (cm²).
+KALMAN_Q          = 0.15    # L3: process noise covariance — heavy
+                             # smoothing mode. The previous Q=12 traded
+                             # too much smoothness for tracking speed:
+                             # frame-to-frame jumps averaged ~6cm (visible
+                             # flicker) because the filter trusted raw,
+                             # noisy measurements almost directly. Q=0.15
+                             # with R=30 cuts frame-to-frame jumps to
+                             # ~1.4cm (well under the ~6-10cm raw noise
+                             # floor) at the cost of more lag while
+                             # cornering — an explicit tradeoff since
+                             # flicker was the priority and lag is
+                             # acceptable for this use case.
+KALMAN_DT         = EXPECTED_CYCLE_MS / 1000.0   # seed value only (~0.03s)
+KALMAN_DT_MIN     = 0.005   # clamp: ignore implausibly tiny dt (duplicate
+                             # or near-simultaneous packets) to avoid
+                             # divide-by-near-zero velocity blowups
+KALMAN_DT_MAX     = 0.5     # clamp: if a tag went stale and comes back
+                             # after a long gap, treat it as a fresh
+                             # re-seed rather than projecting velocity
+                             # across the whole gap
 
 # ═══════════════════════════════════════════════════════════════════════
 # NETWORK CONFIGURATION  ← edit here
@@ -167,6 +211,8 @@ class UWBFilter:
         # L3
         self._kf             = self._make_kalman()
         self._kf_initialised = False
+        self._last_kf_time   = None   # wall-clock time of last KF update,
+                                        # used to compute real per-packet dt
 
         # diagnostics
         self.l1_rejects  = 0
@@ -194,6 +240,10 @@ class UWBFilter:
     # ── L3 ──────────────────────────────────────────────────────────────
     @staticmethod
     def _make_kalman():
+        """Build the KF structure once. F/Q get overwritten per-update in
+        _l3() using the real measured dt, so the dt baked in here only
+        matters for the very first predict() call before any real
+        timestamp has been observed."""
         from filterpy.kalman import KalmanFilter
         dt = KALMAN_DT
         kf = KalmanFilter(dim_x=4, dim_z=2)
@@ -213,13 +263,54 @@ class UWBFilter:
         kf.x = np.zeros((4, 1))
         return kf
 
-    def _l3(self, x: float, y: float) -> tuple[float, float]:
+    @staticmethod
+    def _f_for_dt(dt: float) -> np.ndarray:
+        return np.array([
+            [1, 0, dt, 0],
+            [0, 1,  0, dt],
+            [0, 0,  1,  0],
+            [0, 0,  0,  1],
+        ], dtype=float)
+
+    @staticmethod
+    def _q_for_dt(dt: float) -> np.ndarray:
+        # Scale process noise with dt so longer gaps between packets
+        # widen the uncertainty proportionally instead of using a fixed
+        # value tuned for one specific (and often wrong) interval.
+        return np.eye(4) * (KALMAN_Q * dt / KALMAN_DT)
+
+    def _l3(self, x: float, y: float, now: float | None = None) -> tuple[float, float]:
         if not self._kf_initialised:
             self._kf.x[:] = [[x], [y], [0.0], [0.0]]
             self._kf_initialised = True
+            self._last_kf_time = now
             return x, y
+
+        # Compute real elapsed time since the last update. Falls back to
+        # the seed KALMAN_DT if no timestamp was supplied (keeps the
+        # filter usable even if a caller forgets to pass `now`).
+        if now is not None and self._last_kf_time is not None:
+            dt = now - self._last_kf_time
+        else:
+            dt = KALMAN_DT
+
+        if dt > KALMAN_DT_MAX:
+            # Tag was stale for a while (e.g. went out of range and came
+            # back) — re-seed instead of projecting velocity across a
+            # huge gap, which would fling the predicted position far
+            # from reality.
+            self._kf.x[:] = [[x], [y], [0.0], [0.0]]
+            self._kf.P = np.eye(4) * 20.0
+            self._last_kf_time = now
+            return x, y
+
+        dt = max(dt, KALMAN_DT_MIN)   # avoid divide-by-near-zero velocity blowups
+
+        self._kf.F = self._f_for_dt(dt)
+        self._kf.Q = self._q_for_dt(dt)
         self._kf.predict()
         self._kf.update(np.array([[x], [y]]))
+        self._last_kf_time = now
         self.l3_updates += 1
         return float(self._kf.x[0, 0]), float(self._kf.x[1, 0])
 
@@ -242,15 +333,20 @@ class UWBFilter:
                 out.append(self._l2(i, r1))
         return out
 
-    def filter_position(self, x: float, y: float) -> tuple[float, float]:
-        """Apply L3 Kalman to trilaterated (x, y)."""
-        return self._l3(x, y)
+    def filter_position(self, x: float, y: float, now: float | None = None) -> tuple[float, float]:
+        """Apply L3 Kalman to trilaterated (x, y). Pass `now` (time.time())
+        so the filter can compute real elapsed-time dt instead of assuming
+        a fixed interval — needed because UDP packet arrival from the
+        anchors is irregular even though the underlying hardware ranging
+        cycle (~30ms, from AT+SETCAP=3,10,1) is steady."""
+        return self._l3(x, y, now)
 
     def reset(self):
         self._last_valid.clear()
         self._buffers.clear()
         self._kf             = self._make_kalman()
         self._kf_initialised = False
+        self._last_kf_time   = None
         self.l1_rejects = self.l2_smoothed = self.l3_updates = 0
 
 
@@ -1177,7 +1273,7 @@ def udp_receiver():
                 tag.pkt_rejected += 1; stats['udp_invalid'] += 1
                 continue
             # ── LAYER 3: Kalman on (x, y) ─────────────────────────────
-            rx, ry = tag._filter.filter_position(pos[0], pos[1])
+            rx, ry = tag._filter.filter_position(pos[0], pos[1], now)
             
             # ── CLAMP POSITION TO ANCHOR BOUNDING BOX ─────────────────
             # Prevents negative/outside jumps caused by UWB multipath/NLOS errors

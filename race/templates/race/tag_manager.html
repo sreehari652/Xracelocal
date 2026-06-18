@@ -1112,7 +1112,7 @@
     <span>Atk+: <span id="d_atk" class="warn">—s</span></span>
     <span>Vic-: <span id="d_vic" class="warn">—s</span></span>
     <span>Last pos: <span id="d_pos" class="ok">—</span></span>
-    <span>EMA α: <span id="d_ema" class="hi">0.35</span></span>
+    <span>Filter (Q/R | EMA): <span id="d_ema" class="hi">—</span></span>
   </div>
 
   <div id="rawMonitor">
@@ -1205,34 +1205,41 @@
     const COLORS = ['#00d4ff','#ff3b5c','#00ff88','#ffd700','#a855f7','#ff6b35','#00ffcc','#ff9ff3'];
 
     // ═══════════════════════════════════════════════════════════
-    // JS-SIDE EMA SMOOTHER  (Layer 4 — canvas rendering only)
+    // JS-SIDE SNAP-EMA FILTER  (Layer 4 — canvas rendering only)
     // ═══════════════════════════════════════════════════════════
     //
-    // The Python bridge already ran L1 spike rejection, L2 median,
-    // and L3 Kalman before transmitting. This EMA pass smooths any
-    // remaining micro-jitter visible during canvas animation at
-    // 60 fps without affecting lap/checkpoint logic (which uses the
-    // server-side filtered values).
+    // The Python bridge already runs L1 spike rejection, L2 median
+    // (window=9), and a heavily-tuned L3 Kalman filter (Q=0.15, R=30)
+    // before transmitting — residual frame-to-frame jitter after all
+    // that is typically ~1-2cm for a stationary tag. A plain fixed-alpha
+    // EMA on top of that would smooth the residual jitter further, but
+    // it would also delay genuine fast movement (cornering, acceleration)
+    // by several frames, which is exactly the lag problem the backend
+    // retune was meant to avoid living with twice.
     //
-    // Alpha = 0.35 (medium):
-    //   - 0.0 → frozen (no response)
-    //   - 0.35 → smooth but responsive (~3-4 frame lag at 60fps)
-    //   - 1.0 → raw (no smoothing)
-    //
-    // Tune with the EMA_ALPHA constant below.
+    // This filter avoids that tradeoff: small frame-to-frame changes
+    // (≤ SNAP_THRESHOLD_CM) are treated as residual jitter and smoothed
+    // with an EMA; anything larger is treated as real movement and
+    // passed through immediately with zero added lag.
     // ──────────────────────────────────────────────────────────
-    const EMA_ALPHA = 0.35;
+    const EMA_ALPHA          = 0.5;   // smoothing strength for small jitter
+    const SNAP_THRESHOLD_CM  = 40.0;  // jumps above this bypass smoothing entirely
 
-    // emaState[tag_id] = { x, y, initialised }
+    // emaState[tag_id] = { x, y }
     const emaState = {};
 
     function emaSmooth(tid, rawX, rawY) {
-      if (!emaState[tid]) {
-        // First reading — seed with exact value (no lag on init)
-        emaState[tid] = { x: rawX, y: rawY, initialised: true };
+      const s = emaState[tid];
+      if (!s) {
+        emaState[tid] = { x: rawX, y: rawY };
         return { x: rawX, y: rawY };
       }
-      const s = emaState[tid];
+      const dist = Math.hypot(rawX - s.x, rawY - s.y);
+      if (dist > SNAP_THRESHOLD_CM) {
+        // Real movement — snap straight to it, no smoothing lag.
+        s.x = rawX; s.y = rawY;
+        return { x: rawX, y: rawY };
+      }
       s.x = EMA_ALPHA * rawX + (1 - EMA_ALPHA) * s.x;
       s.y = EMA_ALPHA * rawY + (1 - EMA_ALPHA) * s.y;
       return { x: s.x, y: s.y };
@@ -1273,7 +1280,6 @@
       dbg('d_pkts', totalPackets);
       dbg('d_keys', Object.keys(tagData).length ? Object.keys(tagData).join(',') : 'none');
       dbg('d_players', players.length);
-      dbg('d_ema', EMA_ALPHA.toFixed(2), 'hi');
       if (liveTrack.center.length) dbg('d_track', `${liveTrack.center.length}pts/${liveTrack.checkpoints.length}CPs(need ${CHECKPOINTS_REQUIRED})`, 'ok');
       if (raceConfig.object_collision_time != null) dbg('d_wall', `${parseFloat(raceConfig.object_collision_time).toFixed(1)}s`, 'hi');
       if (raceConfig.collision_creating_time != null) dbg('d_atk', `${parseFloat(raceConfig.collision_creating_time).toFixed(1)}s`, 'hi');
@@ -1408,7 +1414,7 @@
     }
 
     // ═══════════════════════════════════════════════════════════
-    // DRAW LOOP  — uses EMA-smoothed positions for rendering
+    // DRAW LOOP  — uses snap-EMA smoothed positions for rendering
     // ═══════════════════════════════════════════════════════════
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -1514,7 +1520,7 @@
         ctx.fillText(`A${i} (${a.x},${a.y})cm`, p.px+10, p.py-6);
       });
 
-      // ── Cars — EMA-smoothed position for rendering ───────────────────
+      // ── Cars — snap-EMA smoothed for rendering ─────────────────────
       const now = Date.now();
       Object.entries(tagData).forEach(([tidStr, d]) => {
         if (now - d.lastTime > 6000) return;
@@ -1525,7 +1531,7 @@
         const label = player ? player.player_name : `Tag${tid}`;
         const posNum = playerIdx >= 0 ? playerIdx+1 : '?';
 
-        // ── Apply EMA smoothing for canvas render ─────────────────────
+        // ── Apply snap-EMA for canvas render ───────────────────────────
         // d.x / d.y = server-filtered values (used for game logic)
         // smoothed.x / smoothed.y = what we actually draw
         const smoothed = emaSmooth(tid, d.x, d.y);
@@ -1646,7 +1652,14 @@
       ws.onmessage = (e) => {
         try {
           const msg=JSON.parse(e.data); let needRender=false;
-          if (msg.type==='connection') { if (msg.track) applyLiveTrack(msg.track); return; }
+          if (msg.type==='connection') {
+            if (msg.track) applyLiveTrack(msg.track);
+            if (msg.server_info && msg.server_info.filter) {
+              const flt = msg.server_info.filter;
+              dbg('d_ema', `Q=${flt.l3_kalman_Q} R=${flt.l3_kalman_R} | α=${EMA_ALPHA}`, 'hi');
+            }
+            return;
+          }
           if (msg.track) applyLiveTrack(msg.track);
           if (msg.checkpoint_touches) { cpTouches=msg.checkpoint_touches; renderCpPanel(); }
           if (msg.race_config) {
@@ -1735,8 +1748,7 @@
           }
           if (msg.type==='admin_event') {
             if (msg.event==='race_reset') {
-              cpTouches={}; renderCpPanel();
-              resetAllEma();  // ← clear EMA state on reset so no stale smoothing
+              cpTouches={}; renderCpPanel(); resetAllEma();
             }
             appendFeed([`[${msg.event}] ${msg.message}`]); return;
           }
@@ -1946,7 +1958,7 @@
       const slug=document.getElementById('tSel').value, gSel=document.getElementById('gSel');
       gSel.innerHTML='<option value="">— Group —</option>'; gSel.disabled=true;
       currentGroupId=null; currentGroupStatus=''; currentTrackCSV=''; players=[]; reassignMode=false;
-      cpTouches={}; renderCpPanel(); resetAllEma();
+      cpTouches={}; renderCpPanel();
       setBadge(''); updateButtons(); renderPlayers();
       dbg('d_track','none','warn'); dbg('d_wall','—s','warn'); dbg('d_atk','—s','warn'); dbg('d_vic','—s','warn');
       if (!slug) return;
@@ -1984,7 +1996,7 @@
       currentGroupStatus='live'; reassignMode=false; setBadge('live'); updateButtons();
       const opt=document.getElementById('gSel').options[document.getElementById('gSel').selectedIndex];
       opt.dataset.status='live'; opt.textContent=opt.textContent.replace(/\s*\[.*?\]\s*$/,'')+' [live]';
-      cpTouches={}; renderCpPanel(); resetAllEma();   // ← reset EMA on new race start
+      cpTouches={}; renderCpPanel(); resetAllEma();
       await pushScreen('counter');
       sendWS({type:'admin_start',group_id:parseInt(currentGroupId),total_laps:currentTotalLaps,tag_map:buildTagMap(),race_config:raceConfig,track_csv:currentTrackCSV,checkpoints_required:CHECKPOINTS_REQUIRED});
       appendFeed([`▶ Group ${currentGroupId} LIVE – ${currentTotalLaps} laps, ${CHECKPOINTS_REQUIRED} CPs/lap`]);
@@ -2000,7 +2012,7 @@
       opt.dataset.status='finished'; opt.textContent=opt.textContent.replace(/\s*\[.*?\]\s*$/,'')+' [finished]';
       sendWS({type:'reset'}); appendFeed(['⏹ Race finished']);
       Object.keys(tagData).forEach(tid=>{tagData[tid].trail=[];tagData[tid].lapInfo=null;tagData[tid].lapStartTime=null;});
-      liveLeaderboard=[]; cpTouches={}; resetAllEma(); renderLeaderboard(); renderCpPanel(); refreshCollisionStats(); reassignMode=true; updateButtons(); renderPlayers();
+      liveLeaderboard=[]; cpTouches={}; renderLeaderboard(); renderCpPanel(); refreshCollisionStats(); resetAllEma(); reassignMode=true; updateButtons(); renderPlayers();
     }
 
     function doRestart() {
@@ -2209,7 +2221,7 @@
     // INIT
     // ═══════════════════════════════════════════════════════════
     loadTournaments();
-    console.log('[XRace] ready — 4-layer filter: L1 spike|L2 median|L3 Kalman (Python) + L4 EMA α='+EMA_ALPHA+' (JS canvas)');
+    console.log('[XRace] ready — 4-layer filter: L1 spike|L2 median(w=9)|L3 Kalman dt-aware Q=0.15/R=30 (Python) + L4 snap-EMA α='+EMA_ALPHA+'/snap>'+SNAP_THRESHOLD_CM+'cm (JS canvas)');
   </script>
   <!-- ── Tag Assignment Modal ─────────────────────────────── -->
   <div id="tagModal">
