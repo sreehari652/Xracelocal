@@ -1197,9 +1197,9 @@
 
     const ANC = [
       { x: 0,   y: 0   },
-      { x: 720, y: 0   },
-      { x: 720, y: 940 },
-      { x: 0,   y: 940 },
+      { x: 655, y: 0   },
+      { x: 655, y: 920 },
+      { x: 0,   y: 920 },
     ];
 
     const COLORS = ['#00d4ff','#ff3b5c','#00ff88','#ffd700','#a855f7','#ff6b35','#00ffcc','#ff9ff3'];
@@ -1892,7 +1892,7 @@
         }
 
         // ── Step 2: Forward screen_data to local broadcast server ──────────
-        const broadcastResp = await fetch('http://localhost:8001/broadcast-screen/', {
+        const broadcastResp = await fetch('http://localhost:8000/broadcast-screen/', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(dataResult.screen_data)

@@ -51,9 +51,9 @@ LAP_API_URL     = f'{DJANGO_API_BASE}/api/record-lap/'
 # ── Anchor physical positions in CENTIMETRES ──────────────────────────────
 ANCHOR_POSITIONS = {
     0: (0.00, 0.00),
-    1: (720.00, 0.00),
-    2: (720.00, 940.00),
-    3: (0.00, 940.00),
+    1: (655.00, 0.00),
+    2: (655.00, 920.00),
+    3: (0.00, 920.00),
 }
 
 ANCHOR_COUNT = 4
