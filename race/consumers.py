@@ -125,6 +125,35 @@ class RaceTrackConsumer(AsyncWebsocketConsumer):
 
 
 
+# class ScreenConsumer(AsyncWebsocketConsumer):
+
+#     async def connect(self):
+#         await self.channel_layer.group_add(
+#             "screen_updates",
+#             self.channel_name
+#         )
+#         await self.accept()
+
+#     async def disconnect(self, close_code):
+#         await self.channel_layer.group_discard(
+#             "screen_updates",
+#             self.channel_name
+#         )
+
+#     async def screen_update(self, event):
+#         await self.send(json.dumps({
+#             "type": "screen_update",
+#             "data": event["payload"]
+#         }))
+
+
+
+import json
+from channels.generic.websocket import AsyncWebsocketConsumer
+from channels.db import database_sync_to_async
+from django.core.cache import cache
+
+
 class ScreenConsumer(AsyncWebsocketConsumer):
 
     async def connect(self):
@@ -133,6 +162,28 @@ class ScreenConsumer(AsyncWebsocketConsumer):
             self.channel_name
         )
         await self.accept()
+
+        # ── Fetch the current active screen from the cache ────────────────
+        # This ensures that when a user refreshes the page, they immediately
+        # receive the screen they were viewing before the reload.
+        current_screen = await database_sync_to_async(cache.get)('current_live_screen')
+
+        if current_screen:
+            # ✅ Send the screen they were viewing before the refresh
+            await self.send(json.dumps({
+                "type": "screen_update",
+                "data": current_screen
+            }))
+        else:
+            # ✅ Fallback: If no screen is cached (e.g., fresh server start),
+            # default to the landing page as requested.
+            await self.send(json.dumps({
+                "type": "screen_update",
+                "data": {
+                    "displayScreen": "landing",
+                    "landingData": {}
+                }
+            }))
 
     async def disconnect(self, close_code):
         await self.channel_layer.group_discard(

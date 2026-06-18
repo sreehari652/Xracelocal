@@ -48,6 +48,78 @@ def tag_manager_page(request):
 #     return JsonResponse({"success": True, "message": "Broadcast sent to race_track group"})
 
 
+# @csrf_exempt
+# def broadcast_screen(request):
+#     """
+#     POST /broadcast-screen/
+
+#     Receives a ScreenData JSON payload from xrace_backend and
+#     broadcasts it to every frontend connected to the race_track
+#     WebSocket group (ws://localhost:<port>/ws/race/).
+
+#     Expected body (JSON):
+#     {
+#         "displayScreen": "leaderboard" | "group" | ...,
+#         "groupData":         { ... },
+#         "leaderboardData":   { ... },
+#         "playersData":       { ... },
+#         "playersDetailsData": [ ... ],
+#         "qualifyData":       { ... }
+#     }
+#     """
+#     # ── Handle CORS Preflight ─────────────────────────────────────────
+#     if request.method == "OPTIONS":
+#         response = JsonResponse({})
+#         response["Access-Control-Allow-Origin"] = "*"
+#         response["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+#         response["Access-Control-Allow-Headers"] = "Content-Type, X-CSRFToken"
+#         return response
+
+#     if request.method != "POST":
+#         return JsonResponse({"success": False, "error": "Method not allowed"}, status=405)
+
+#     # ── Parse Body ───────────────────────────────────────────────────
+#     try:
+#         data = json.loads(request.body)
+#     except json.JSONDecodeError:
+#         return JsonResponse({"success": False, "error": "Invalid JSON"}, status=400)
+
+#     if not data:
+#         return JsonResponse({"success": False, "error": "Empty payload"}, status=400)
+
+#     # ── Broadcast via Channel Layer ──────────────────────────────────
+#     try:
+#         channel_layer = get_channel_layer()
+#         async_to_sync(channel_layer.group_send)(
+#             "screen_updates",
+#             {
+#                 "type": "screen_update",
+#                 "payload": data,
+#             }
+#         )
+#     except Exception as e:
+#         print(f"[broadcast_screen] Channel layer error: {e}")
+#         response = JsonResponse({"success": False, "error": f"Channel layer error: {str(e)}"}, status=500)
+#         response["Access-Control-Allow-Origin"] = "*"
+#         return response
+
+#     # ── Success ──────────────────────────────────────────────────────
+#     response = JsonResponse({
+#         "success": True,
+#         "message": "Broadcast sent to race_track group",
+#         "screen": data.get("displayScreen", "unknown"),
+#     })
+#     response["Access-Control-Allow-Origin"] = "*"
+#     return response
+
+
+import json
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
+from django.core.cache import cache  # <-- Added import for caching
+
 @csrf_exempt
 def broadcast_screen(request):
     """
@@ -56,16 +128,10 @@ def broadcast_screen(request):
     Receives a ScreenData JSON payload from xrace_backend and
     broadcasts it to every frontend connected to the race_track
     WebSocket group (ws://localhost:<port>/ws/race/).
-
-    Expected body (JSON):
-    {
-        "displayScreen": "leaderboard" | "group" | ...,
-        "groupData":         { ... },
-        "leaderboardData":   { ... },
-        "playersData":       { ... },
-        "playersDetailsData": [ ... ],
-        "qualifyData":       { ... }
-    }
+    
+    It also saves the payload to the Django cache so that if a user 
+    refreshes the page, the WebSocket consumer can immediately send 
+    them the current screen data upon reconnection.
     """
     # ── Handle CORS Preflight ─────────────────────────────────────────
     if request.method == "OPTIONS":
@@ -86,6 +152,14 @@ def broadcast_screen(request):
 
     if not data:
         return JsonResponse({"success": False, "error": "Empty payload"}, status=400)
+
+    # ── Save to Cache for Reconnections ───────────────────────────────
+    # We save the screen data here. timeout=None means it will stay in the 
+    # cache indefinitely until it is overwritten by the next broadcast.
+    try:
+        cache.set('current_live_screen', data, timeout=None)
+    except Exception as e:
+        print(f"[broadcast_screen] Warning: Could not save to cache: {e}")
 
     # ── Broadcast via Channel Layer ──────────────────────────────────
     try:
