@@ -84,6 +84,20 @@ START_LINE_Y2        = 340.00
 LINE_CROSS_TOLERANCE = 8.00
 LINE_Y_TOLERANCE     = 30.00
 SF_CROSSING_DIR      = 'left_to_right'
+# Proximity-based S/F gate: centre point + radius (cm). Any tag within this
+# radius of the S/F centre counts as crossing — direction-agnostic, so the
+# CSV's two endpoints no longer need to form a strict vertical line.
+SF_GATE_CX     = (START_LINE_X)
+SF_GATE_CY     = (START_LINE_Y1 + START_LINE_Y2) / 2
+SF_GATE_RADIUS = 90.00   # cm — generous "anywhere near the start" zone.
+                          # Must exceed the track's half-width at the S/F
+                          # point, or a car hugging either wall edge will
+                          # sit right at/outside the radius boundary.
+
+# Minimum effective checkpoint radius (cm). Any checkpoint defined in the
+# CSV with a smaller radius is still treated as at least this generous, so
+# "touch any part near checkpoint" works reliably.
+CP_MIN_RADIUS = 45.00
 
 # ── Default checkpoints in CENTIMETRES (overridden by CSV) ─────────────────
 CHECKPOINTS = [
@@ -277,6 +291,11 @@ class TrackData:
         self.sf_y1:  float = START_LINE_Y1
         self.sf_y2:  float = START_LINE_Y2
         self.sf_dir: str   = SF_CROSSING_DIR
+        # True midpoint of the two raw S/F endpoints, regardless of whether
+        # they form a vertical, horizontal, or diagonal segment. Used for
+        # proximity-based gate detection (works for ANY line orientation).
+        self.sf_cx:  float = SF_GATE_CX
+        self.sf_cy:  float = SF_GATE_CY
 
     def is_loaded(self) -> bool:
         return bool(self.center)
@@ -326,6 +345,11 @@ def parse_track_csv(csv_text: str) -> TrackData:
                 td.sf_x  = (x1 + x2) / 2
                 td.sf_y1 = min(y1_sf, y2_sf)
                 td.sf_y2 = max(y1_sf, y2_sf)
+                # True midpoint of the two raw endpoints — correct regardless
+                # of whether the segment is vertical, horizontal, or diagonal.
+                # This is what proximity-based gate detection actually uses.
+                td.sf_cx = (x1 + x2) / 2
+                td.sf_cy = (y1_sf + y2_sf) / 2
                 if len(parts) >= 6:
                     td.sf_dir = parts[5].lower().strip()
             elif kind == 'CHECKPOINT' and len(parts) >= 5:
@@ -344,6 +368,7 @@ def parse_track_csv(csv_text: str) -> TrackData:
 
 def apply_track_data(td: TrackData):
     global CHECKPOINTS, START_LINE_X, START_LINE_Y1, START_LINE_Y2, SF_CROSSING_DIR
+    global SF_GATE_CX, SF_GATE_CY
 
     if td.checkpoints:
         CHECKPOINTS = list(td.checkpoints)
@@ -355,7 +380,10 @@ def apply_track_data(td: TrackData):
     START_LINE_Y1   = td.sf_y1
     START_LINE_Y2   = td.sf_y2
     SF_CROSSING_DIR = td.sf_dir
+    SF_GATE_CX      = td.sf_cx
+    SF_GATE_CY      = td.sf_cy
     print(f"[TRACK] S/F  x={START_LINE_X:.3f}cm  y=[{START_LINE_Y1:.3f}..{START_LINE_Y2:.3f}]cm  dir={SF_CROSSING_DIR}")
+    print(f"[TRACK] S/F gate centre = ({SF_GATE_CX:.3f}, {SF_GATE_CY:.3f})cm  radius={SF_GATE_RADIUS:.1f}cm")
 
     for eng in race_mgr._engines.values():
         eng.reset()
@@ -739,7 +767,16 @@ class LapEngine:
         self.current_lap = 0; self.laps_done = 0
         self.is_racing = False; self.race_finished = False; self.admin_armed = False
         self._lap_start = None; self._last_cross = 0.0; self._lap_times = []
-        self._next_cp = 0; self._sf_side = None
+        # Order-independent checkpoint tracking: a set of indices touched
+        # so far this lap. Any checkpoint can be touched in any order, from
+        # any direction — it lights up the instant the tag enters its zone.
+        # A lap is only valid once ALL checkpoints have been touched at
+        # least once (regardless of order) before the next S/F crossing.
+        self._cp_touched_this_lap: set = set()
+        # Proximity-gate state: True while the tag is currently inside the
+        # S/F radius. A crossing event fires only on the rising edge
+        # (outside → inside), so sitting in the zone doesn't re-trigger.
+        self._in_sf_zone = False
         self.current_lap_cp_hits: list = []
 
     def arm(self):
@@ -751,65 +788,50 @@ class LapEngine:
         sf_ev = self._check_sf_line(x, y, now)
         return sf_ev or cp_ev
 
-    def _on_line(self, y):
-        return (START_LINE_Y1 - LINE_Y_TOLERANCE) <= y <= (START_LINE_Y2 + LINE_Y_TOLERANCE)
-
     def _check_sf_line(self, x, y, now):
-        tol = LINE_CROSS_TOLERANCE
-        new_side = 'left' if x < START_LINE_X else 'right'
+        # Proximity-based gate: ANY tag within SF_GATE_RADIUS of the S/F
+        # centre point counts as "at the start/finish" — regardless of
+        # approach direction or how the CSV's two raw endpoints were
+        # oriented. This satisfies "pass anywhere near start".
+        dist = math.hypot(x - SF_GATE_CX, y - SF_GATE_CY)
+        currently_in = dist <= SF_GATE_RADIUS
 
-        if self._sf_side is None:
-            self._sf_side = new_side
-            print(f"[SF-DEBUG] {self.car_name} init side={new_side} x={x:.3f} START_LINE_X={START_LINE_X:.3f}")
-            return None
+        if currently_in and not self._in_sf_zone:
+            # Rising edge: just entered the zone — this is the crossing.
+            self._in_sf_zone = True
+            if now - self._last_cross < MIN_LAP_TIME:
+                print(f"[SF] {self.car_name} debounce — ignored (dist={dist:.1f}cm)")
+                return None
+            print(f"[SF] ✓ {self.car_name} entered S/F zone  "
+                  f"x={x:.3f}cm y={y:.3f}cm dist={dist:.1f}cm (radius={SF_GATE_RADIUS:.0f}cm)")
+            self._last_cross = now
+            return self._process_crossing(now)
 
-        prev_side = self._sf_side
-        if new_side != prev_side and abs(x - START_LINE_X) < tol:
-            return None
-        self._sf_side = new_side
-
-        if new_side == prev_side:
-            return None
-
-        crossing = ((prev_side=='right' and new_side=='left')  if SF_CROSSING_DIR=='right_to_left'
-                    else (prev_side=='left' and new_side=='right'))
-
-        print(f"[SF-DEBUG] {self.car_name} side {prev_side}->{new_side} x={x:.3f} y={y:.3f} "
-              f"crossing={crossing} on_line={self._on_line(y)} dir={SF_CROSSING_DIR}")
-
-        if not crossing: return None
-        if not self._on_line(y):
-            print(f"[SF] {self.car_name} crossed but y={y:.3f}cm outside Y range "
-                  f"[{START_LINE_Y1 - LINE_Y_TOLERANCE:.1f}..{START_LINE_Y2 + LINE_Y_TOLERANCE:.1f}] — ignored")
-            return None
-        if now - self._last_cross < MIN_LAP_TIME:
-            print(f"[SF] {self.car_name} debounce — ignored")
-            return None
-
-        print(f"[SF] ✓ {self.car_name} ({prev_side}→{new_side}) x={x:.3f}cm y={y:.3f}cm")
-        self._last_cross = now
-        return self._process_crossing(now)
+        if not currently_in and self._in_sf_zone:
+            self._in_sf_zone = False   # left the zone, ready to re-trigger next time
+        return None
 
     def _process_crossing(self, now):
         if not self.is_racing:
             self.is_racing = True; self.current_lap = 1
-            self._lap_start = now; self._next_cp = 0
+            self._lap_start = now; self._cp_touched_this_lap = set()
             self.current_lap_cp_hits = []
             self.scoring.open_lap(self.car_id, 1)
             print(f"🏁 START | {self.car_name} Lap 1/{TOTAL_LAPS}")
             return dict(type='race_start', car_id=self.car_id, car_name=self.car_name, lap=1, time=now)
 
-        if self._next_cp < len(CHECKPOINTS):
-            missing = len(CHECKPOINTS) - self._next_cp
-            print(f"⚠ LAP VOID | {self.car_name} — {missing} CP(s) not hit (next: CP{self._next_cp})")
-            self._next_cp = 0
+        if len(self._cp_touched_this_lap) < len(CHECKPOINTS):
+            missing = len(CHECKPOINTS) - len(self._cp_touched_this_lap)
+            missing_idx = [i for i in range(len(CHECKPOINTS)) if i not in self._cp_touched_this_lap]
+            print(f"⚠ LAP VOID | {self.car_name} — {missing} CP(s) not hit (missing: {missing_idx})")
+            self._cp_touched_this_lap = set()
             self.current_lap_cp_hits = []
             return None
 
         raw = now - self._lap_start
         ls  = self.scoring.close_lap(self.car_id, raw)
         self._lap_times.append(raw); self.laps_done += 1
-        self._next_cp = 0
+        self._cp_touched_this_lap = set()
         self.current_lap_cp_hits = []
         ev = dict(type='lap_done', car_id=self.car_id, car_name=self.car_name,
                   lap=self.current_lap, raw_time=raw, elp=ls.elp, time=now)
@@ -829,27 +851,37 @@ class LapEngine:
         return ev
 
     def _check_checkpoints(self, x, y, now):
-        if self._next_cp >= len(CHECKPOINTS):
-            return None
-        cx, cy, cr = CHECKPOINTS[self._next_cp]
-        if math.hypot(x-cx, y-cy) <= cr:
-            idx = self._next_cp
-            print(f"  ✔ CP{idx} | {self.car_name} @ ({x:.3f},{y:.3f})cm [{idx+1}/{len(CHECKPOINTS)}]")
-            self._next_cp += 1
-            self.current_lap_cp_hits.append(idx)
+        # Order-independent: scan ALL checkpoints every update. Any
+        # checkpoint not yet touched this lap that the tag is currently
+        # within range of gets marked touched and lights up immediately —
+        # regardless of which order checkpoints are touched in.
+        for idx, (cx, cy, cr) in enumerate(CHECKPOINTS):
+            if idx in self._cp_touched_this_lap:
+                continue
+            # Be forgiving: never let a checkpoint's effective radius be
+            # smaller than CP_MIN_RADIUS, so "touch anywhere near it"
+            # works even if the CSV defines a tiny radius for that point.
+            eff_r = max(cr, CP_MIN_RADIUS)
+            dist = math.hypot(x-cx, y-cy)
+            if dist <= eff_r:
+                self._cp_touched_this_lap.add(idx)
+                self.current_lap_cp_hits.append(idx)
+                print(f"  ✔ CP{idx} | {self.car_name} @ ({x:.3f},{y:.3f})cm "
+                      f"dist={dist:.1f}cm (r={eff_r:.0f}cm) "
+                      f"[{len(self._cp_touched_this_lap)}/{len(CHECKPOINTS)}]")
 
-            if idx not in checkpoint_touch_history:
-                checkpoint_touch_history[idx] = []
-            checkpoint_touch_history[idx].append({
-                "car_id":   self.car_id,
-                "car_name": self.car_name,
-                "lap":      self.current_lap,
-                "time":     now,
-            })
+                if idx not in checkpoint_touch_history:
+                    checkpoint_touch_history[idx] = []
+                checkpoint_touch_history[idx].append({
+                    "car_id":   self.car_id,
+                    "car_name": self.car_name,
+                    "lap":      self.current_lap,
+                    "time":     now,
+                })
 
-            return dict(type='checkpoint', car_id=self.car_id, car_name=self.car_name,
-                        cp_index=idx, total=len(CHECKPOINTS),
-                        cp_touches=checkpoint_touch_history.get(idx, []))
+                return dict(type='checkpoint', car_id=self.car_id, car_name=self.car_name,
+                            cp_index=idx, total=len(CHECKPOINTS),
+                            cp_touches=checkpoint_touch_history.get(idx, []))
         return None
 
     def elapsed(self, now):
@@ -865,14 +897,14 @@ class LapEngine:
                     race_finished=self.race_finished,
                     current_lap_elapsed=self.elapsed(now or time.time()),
                     best_raw=self.best_raw(), lap_times=list(self._lap_times),
-                    checkpoints_hit=self._next_cp, checkpoints_total=len(CHECKPOINTS),
+                    checkpoints_hit=len(self._cp_touched_this_lap), checkpoints_total=len(CHECKPOINTS),
                     cp_hits_this_lap=list(self.current_lap_cp_hits))
 
     def reset(self):
         self.current_lap = 0; self.laps_done = 0
         self.is_racing = False; self.race_finished = False; self.admin_armed = False
-        self._sf_side = None; self._lap_start = None; self._last_cross = 0.0
-        self._lap_times.clear(); self._next_cp = 0
+        self._in_sf_zone = False; self._lap_start = None; self._last_cross = 0.0
+        self._lap_times.clear(); self._cp_touched_this_lap = set()
         self.current_lap_cp_hits = []
 
 
@@ -1112,7 +1144,6 @@ def udp_receiver():
     sock.settimeout(0.1)
     print(f"[UDP] Listening on port {UDP_PORT}")
     print(f"[UDP] Filtering: L1 jump>{JUMP_THRESHOLD_CM}cm | L2 median(w={MEDIAN_WINDOW}) | L3 Kalman(R={KALMAN_R},Q={KALMAN_Q})")
-
     while running:
         try:
             data, addr = sock.recvfrom(2048)
@@ -1123,7 +1154,6 @@ def udp_receiver():
                 if stats['udp_total'] % 50 == 1:
                     print(f"[FWD] Forward to 192.168.29.27:{UDP_PORT} failed: {fwd_err}")
             stats['udp_total'] += 1
-
             # ── Parse AT+RANGE format ──────────────────────────────────
             try:
                 tid, ranges_m, ancid = parse_at_range(data)
@@ -1132,42 +1162,38 @@ def udp_receiver():
                 if stats['udp_total'] % 50 == 1:
                     print(f"[UDP] Parse fail from {addr}: {e}")
                 continue
-
             if tid not in tags:
                 stats['udp_invalid'] += 1
                 continue
-
             # Reorder by ancid so index matches ANCHOR_POSITIONS
             raw_ranges = reorder_by_ancid(ranges_m, ancid, ANCHOR_COUNT)
-
             now = time.time()
             tag = tags[tid]; tag.pkt_total += 1
-
             # ── LAYER 1 + 2: filter per-anchor ranges ─────────────────
             filtered_ranges = tag._filter.filter_ranges(raw_ranges)
-
             # ── Trilaterate on filtered ranges ─────────────────────────
             pos, quality, anc_count = Positioning.calculate(filtered_ranges, ANCHOR_POSITIONS)
             if pos is None:
                 tag.pkt_rejected += 1; stats['udp_invalid'] += 1
                 continue
-
             # ── LAYER 3: Kalman on (x, y) ─────────────────────────────
             rx, ry = tag._filter.filter_position(pos[0], pos[1])
+            
+            # ── CLAMP POSITION TO ANCHOR BOUNDING BOX ─────────────────
+            # Prevents negative/outside jumps caused by UWB multipath/NLOS errors
+            rx = max(0.0, min(rx, 655.0))
+            ry = max(0.0, min(ry, 920.0))
 
             tag.update_position(rx, ry, quality, anc_count, now)
             # Store filtered ranges for display (raw would be misleading)
             tag.last_ranges = [round(r, 1) for r in filtered_ranges]
             stats['udp_valid'] += 1; stats['tags_seen'].add(tid)
-
             print(f"[UWB] Tag{tid}  pos=({rx:.1f},{ry:.1f})cm  "
                   f"raw=[{','.join(f'{r:.0f}' for r in raw_ranges)}]  "
                   f"flt=[{','.join(f'{r:.0f}' for r in filtered_ranges)}]  "
                   f"{quality}  {tag.speed_display():.1f}{SPEED_DISPLAY_UNIT}  "
                   f"L1rej={tag._filter.l1_rejects}")
-
             game_evts = process_race_update(tid, now)
-
             if connected_clients and event_loop:
                 li = race_mgr.get_info(tid, now)
                 open_lap = scoring._open.get(tid)
@@ -1187,9 +1213,8 @@ def udp_receiver():
                     lap_info=li,
                     checkpoint_touches=_serialize_cp_touches()))
                 asyncio.run_coroutine_threadsafe(broadcast(msg), event_loop)
-                if game_evts:
-                    asyncio.run_coroutine_threadsafe(broadcast(build_state(now)), event_loop)
-
+            if game_evts:
+                asyncio.run_coroutine_threadsafe(broadcast(build_state(now)), event_loop)
         except socket.timeout:
             continue
         except Exception as e:
@@ -1197,7 +1222,6 @@ def udp_receiver():
                 print(f"[UDP] Error: {e}")
     sock.close()
     print("[UDP] Stopped")
-
 
 # ═══════════════════════════════════════════════════════════════════════
 # WEBSOCKET
