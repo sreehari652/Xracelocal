@@ -174,17 +174,7 @@ class ScreenConsumer(AsyncWebsocketConsumer):
                 "type": "screen_update",
                 "data": current_screen
             }))
-        else:
-            # ✅ Fallback: If no screen is cached (e.g., fresh server start),
-            # default to the landing page as requested.
-            await self.send(json.dumps({
-                "type": "screen_update",
-                "data": {
-                    "displayScreen": "landing",
-                    "landingData": {}
-                }
-            }))
-
+        
     async def disconnect(self, close_code):
         await self.channel_layer.group_discard(
             "screen_updates",
