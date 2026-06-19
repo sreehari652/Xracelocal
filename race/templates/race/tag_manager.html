@@ -1668,7 +1668,10 @@
             return;
           }
           if (msg.track) applyLiveTrack(msg.track);
-          if (msg.checkpoint_touches) { cpTouches=msg.checkpoint_touches; renderCpPanel(); }
+          // Only apply server's checkpoint_touches on initial load (no local data yet).
+          // During a race, cpTouches is owned by JS via checkpoint game events so the
+          // server's global history (which never resets per-lap) doesn't repopulate dots.
+          if (msg.checkpoint_touches && Object.keys(cpTouches).length===0) { cpTouches=msg.checkpoint_touches; renderCpPanel(); }
           if (msg.race_config) {
             if (msg.race_config.wall_hit_penalty!=null)  raceConfig.object_collision_time=msg.race_config.wall_hit_penalty;
             if (msg.race_config.attacker_penalty!=null)  raceConfig.collision_creating_time=msg.race_config.attacker_penalty;
@@ -1739,6 +1742,7 @@
                       setTimeout(renderPlayers,10);
                     }
                   }
+                  cpTouches={}; renderCpPanel();
                   if (ev.elp!=null) { const _pid=_p?parseInt(_p.tag_id,10):null; let lb=liveLeaderboard.find(r=>r.car_id===_pid); if (!lb) { lb={car_id:_pid,best_elp:Infinity,best_raw:Infinity,laps_done:0}; liveLeaderboard.push(lb); } if (ev.elp<lb.best_elp) lb.best_elp=ev.elp; lb.laps_done=(lb.laps_done||0)+1; }
                   setTimeout(()=>{ renderLeaderboard(); refreshCollisionStats(); },50);
                   return `LAP  ${ev.car_name} #${ev.lap}  ${ev.raw_time?.toFixed(2)}s  ELP:${ev.elp?.toFixed(2)}s`;
@@ -1746,6 +1750,7 @@
                 if (ev.type==='race_start') {
                   const _p=players.find(p=>p.player_name===ev.car_name);
                   if (_p&&_p.tag_id!==null) { const _t=parseInt(_p.tag_id,10); if (!isNaN(_t)) { if (!tagData[_t]) tagData[_t]={x:0,y:0,trail:[],lastTime:0,speed:0,lapInfo:null,lapStartTime:null,wallHits:0,carHits:0}; tagData[_t].lapStartTime=Date.now(); if (!tagData[_t].lapInfo) tagData[_t].lapInfo={}; tagData[_t].lapInfo.is_racing=true; tagData[_t].lapInfo.current_lap=ev.lap||1; tagData[_t].lapInfo.total_laps=currentTotalLaps; tagData[_t].lapInfo.checkpoints_hit=0; tagData[_t].lapInfo._cpSet=new Set(); tagData[_t].lapInfo.checkpoints_total=CHECKPOINTS_REQUIRED; setTimeout(renderPlayers,10); } }
+                  cpTouches={}; renderCpPanel();
                   return `START  ${ev.car_name}`;
                 }
                 if (ev.type==='checkpoint') {
