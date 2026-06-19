@@ -1097,7 +1097,14 @@
       <span class="wall-group-label">Results</span>
       <button class="btn-wall" id="wbtn-qualify" onclick="pushScreen('qualify')">Qualify</button>
     </div>
+
+    <div class="wall-group" id="finaleGroup" style="display:none;">
+      <span class="wall-group-label">Final</span>
+      <button class="btn-wall" id="wbtn-finale" onclick="pushFinale()">🏆 Finale</button>
+    </div>
+
     <div class="wall-status" id="wallStatus">— not sent yet —</div>
+    
   </div>
 
   <div id="wallToast" style="position:fixed;bottom:20px;right:20px;z-index:9999;background:#0d1117;border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-family:'Rajdhani',sans-serif;font-size:.85rem;font-weight:600;color:var(--text);display:none;box-shadow:0 4px 24px rgba(0,0,0,0.5);transition:opacity .3s;max-width:320px;"></div>
@@ -1284,6 +1291,33 @@
       if (raceConfig.object_collision_time != null) dbg('d_wall', `${parseFloat(raceConfig.object_collision_time).toFixed(1)}s`, 'hi');
       if (raceConfig.collision_creating_time != null) dbg('d_atk', `${parseFloat(raceConfig.collision_creating_time).toFixed(1)}s`, 'hi');
       if (raceConfig.collision_absorbing_time != null) dbg('d_vic', `${parseFloat(raceConfig.collision_absorbing_time).toFixed(1)}s`, 'hi');
+    }
+
+
+    function updateFinaleButton() {
+      const gSel = document.getElementById('gSel');
+      const finaleGroup = document.getElementById('finaleGroup');
+      if (!currentGroupId || !gSel.options[gSel.selectedIndex]) {
+        finaleGroup.style.display = 'none';
+        return;
+      }
+      const opt = gSel.options[gSel.selectedIndex];
+      const isFinal = opt.dataset.is_final === 'true';
+      finaleGroup.style.display = isFinal ? '' : 'none';
+    }
+
+    async function pushFinale() {
+      const gSel = document.getElementById('gSel');
+      const opt = gSel.options[gSel.selectedIndex];
+      const isFinal = opt?.dataset.is_final === 'true';
+      if (!isFinal) return;
+
+      // Determine screen based on group status
+      const screenType = (currentGroupStatus === 'finished')
+        ? 'finale_after'
+        : 'finale_before';
+
+      await pushScreen(screenType);
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -1959,7 +1993,7 @@
       gSel.innerHTML='<option value="">— Group —</option>'; gSel.disabled=true;
       currentGroupId=null; currentGroupStatus=''; currentTrackCSV=''; players=[]; reassignMode=false;
       cpTouches={}; renderCpPanel();
-      setBadge(''); updateButtons(); renderPlayers();
+      setBadge(''); updateButtons(); renderPlayers(); updateFinaleButton();
       dbg('d_track','none','warn'); dbg('d_wall','—s','warn'); dbg('d_atk','—s','warn'); dbg('d_vic','—s','warn');
       if (!slug) return;
       const {data}=await apiFetch(API.struct+'?slug='+slug); if (!data?.rounds) return;
@@ -1983,6 +2017,7 @@
       const {data}=await apiFetch(API.players+'?group_id='+currentGroupId);
       players=(data||[]).map(p=>({...p,tag_id:(p.tag_id!==null&&p.tag_id!==undefined&&p.tag_id!=='')?parseInt(p.tag_id,10):null}));
       refreshDebugBar(); renderPlayers();
+      updateFinaleButton();
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -2001,6 +2036,7 @@
       sendWS({type:'admin_start',group_id:parseInt(currentGroupId),total_laps:currentTotalLaps,tag_map:buildTagMap(),race_config:raceConfig,track_csv:currentTrackCSV,checkpoints_required:CHECKPOINTS_REQUIRED});
       appendFeed([`▶ Group ${currentGroupId} LIVE – ${currentTotalLaps} laps, ${CHECKPOINTS_REQUIRED} CPs/lap`]);
       renderPlayers();
+      updateFinaleButton();
      
     }
 
@@ -2012,7 +2048,7 @@
       opt.dataset.status='finished'; opt.textContent=opt.textContent.replace(/\s*\[.*?\]\s*$/,'')+' [finished]';
       sendWS({type:'reset'}); appendFeed(['⏹ Race finished']);
       Object.keys(tagData).forEach(tid=>{tagData[tid].trail=[];tagData[tid].lapInfo=null;tagData[tid].lapStartTime=null;});
-      liveLeaderboard=[]; cpTouches={}; renderLeaderboard(); renderCpPanel(); refreshCollisionStats(); resetAllEma(); reassignMode=true; updateButtons(); renderPlayers();
+      liveLeaderboard=[]; cpTouches={}; renderLeaderboard(); renderCpPanel(); refreshCollisionStats(); resetAllEma(); reassignMode=true; updateButtons();  updateFinaleButton(); renderPlayers();
     }
 
     function doRestart() {
