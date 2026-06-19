@@ -1007,7 +1007,6 @@
     <button class="btn btn-live" id="btnLive" onclick="doLive()" disabled>▶ Live</button>
     <button class="btn btn-finish" id="btnFinish" onclick="doFinish()" disabled>⏹ Finish</button>
     <button class="btn btn-restart" id="btnRestart" onclick="doRestart()" disabled>↺ Restart</button>
-    <button class="btn btn-raw" id="btnRawToggle" onclick="toggleRawSection()">▼ RAW</button>
     <span class="ws-pill ws-fail" id="wsPill">● WS</span>
   </div>
 
@@ -1076,7 +1075,7 @@
   </style>
 
   <div class="wall-bar" id="wallBar">
-    <span class="wall-label">🖥 Live Wall</span>
+    <span class="wall-label">:desktop: Live Wall</span>
     <div class="wall-group">
       <span class="wall-group-label">General</span>
       <button class="btn-wall" id="wbtn-landing" onclick="pushScreen('landing')">Landing</button>
@@ -1100,7 +1099,7 @@
 
     <div class="wall-group" id="finaleGroup" style="display:none;">
       <span class="wall-group-label">Final</span>
-      <button class="btn-wall" id="wbtn-finale" onclick="pushFinale()">🏆 Finale</button>
+      <button class="btn-wall" id="wbtn-finale" onclick="pushFinale()">:trophy: Finale</button>
     </div>
 
     <div class="wall-status" id="wallStatus">— not sent yet —</div>
@@ -1122,7 +1121,7 @@
     <span>Filter (Q/R | EMA): <span id="d_ema" class="hi">—</span></span>
   </div>
 
-  <div id="rawMonitor">
+  <div id="rawMonitor" style="display:none">
     <div id="rawHeader">
       <span style="color:#00d4ff;font-weight:700;letter-spacing:2px;font-size:.7rem;">▶ RAW UDP STREAM</span>
       <div style="display:flex;gap:8px;align-items:center;">
@@ -1292,33 +1291,6 @@
       if (raceConfig.object_collision_time != null) dbg('d_wall', `${parseFloat(raceConfig.object_collision_time).toFixed(1)}s`, 'hi');
       if (raceConfig.collision_creating_time != null) dbg('d_atk', `${parseFloat(raceConfig.collision_creating_time).toFixed(1)}s`, 'hi');
       if (raceConfig.collision_absorbing_time != null) dbg('d_vic', `${parseFloat(raceConfig.collision_absorbing_time).toFixed(1)}s`, 'hi');
-    }
-
-
-    function updateFinaleButton() {
-      const gSel = document.getElementById('gSel');
-      const finaleGroup = document.getElementById('finaleGroup');
-      if (!currentGroupId || !gSel.options[gSel.selectedIndex]) {
-        finaleGroup.style.display = 'none';
-        return;
-      }
-      const opt = gSel.options[gSel.selectedIndex];
-      const isFinal = opt.dataset.is_final === 'true';
-      finaleGroup.style.display = isFinal ? '' : 'none';
-    }
-
-    async function pushFinale() {
-      const gSel = document.getElementById('gSel');
-      const opt = gSel.options[gSel.selectedIndex];
-      const isFinal = opt?.dataset.is_final === 'true';
-      if (!isFinal) return;
-
-      // Determine screen based on group status
-      const screenType = (currentGroupStatus === 'finished')
-        ? 'finale_after'
-        : 'finale_before';
-
-      await pushScreen(screenType);
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -1715,7 +1687,11 @@
                 if (car.x!=null) tagData[tid].x=car.x;
                 if (car.y!=null) tagData[tid].y=car.y;
                 tagData[tid].lastTime=Date.now();
-                const prevR=tagData[tid].lapInfo?.is_racing; tagData[tid].lapInfo=car.lap_info;
+                const prevR=tagData[tid].lapInfo?.is_racing;
+                const prevCpSet2=tagData[tid].lapInfo?._cpSet;
+                const prevCpHit2=tagData[tid].lapInfo?.checkpoints_hit??0;
+                tagData[tid].lapInfo=car.lap_info;
+                if (prevCpSet2&&tagData[tid].lapInfo) { tagData[tid].lapInfo._cpSet=prevCpSet2; tagData[tid].lapInfo.checkpoints_hit=prevCpHit2; }
                 if (car.speed!=null) tagData[tid].speed=car.speed;
                 if (car.wall_hits!=null)    tagData[tid].wallHits=car.wall_hits;
                 if (car.car_collisions!=null) tagData[tid].carHits=car.car_collisions;
@@ -1737,7 +1713,12 @@
             if (msg.wall_hits!=null)     { tagData[tid].wallHits=msg.wall_hits;    refreshCollisionStats(); }
             if (msg.car_collisions!=null) { tagData[tid].carHits=msg.car_collisions; refreshCollisionStats(); }
             if (msg.lap_info!=null) {
-              const pr=tagData[tid].lapInfo?.is_racing; tagData[tid].lapInfo=msg.lap_info;
+              const pr=tagData[tid].lapInfo?.is_racing;
+              const prevCpSet=tagData[tid].lapInfo?._cpSet;
+              const prevCpHit=tagData[tid].lapInfo?.checkpoints_hit??0;
+              tagData[tid].lapInfo=msg.lap_info;
+              if (prevCpSet) tagData[tid].lapInfo._cpSet=prevCpSet;
+              tagData[tid].lapInfo.checkpoints_hit=prevCpHit;
               if (pr!==msg.lap_info?.is_racing) setTimeout(renderPlayers,10);
             }
             tagData[tid].trail.push({x:msg.x,y:msg.y});
@@ -1994,7 +1975,7 @@
       gSel.innerHTML='<option value="">— Group —</option>'; gSel.disabled=true;
       currentGroupId=null; currentGroupStatus=''; currentTrackCSV=''; players=[]; reassignMode=false;
       cpTouches={}; renderCpPanel();
-      setBadge(''); updateButtons(); renderPlayers(); updateFinaleButton();
+      setBadge(''); updateButtons(); renderPlayers();
       dbg('d_track','none','warn'); dbg('d_wall','—s','warn'); dbg('d_atk','—s','warn'); dbg('d_vic','—s','warn');
       if (!slug) return;
       const {data}=await apiFetch(API.struct+'?slug='+slug); if (!data?.rounds) return;
@@ -2018,7 +1999,6 @@
       const {data}=await apiFetch(API.players+'?group_id='+currentGroupId);
       players=(data||[]).map(p=>({...p,tag_id:(p.tag_id!==null&&p.tag_id!==undefined&&p.tag_id!=='')?parseInt(p.tag_id,10):null}));
       refreshDebugBar(); renderPlayers();
-      updateFinaleButton();
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -2037,7 +2017,6 @@
       sendWS({type:'admin_start',group_id:parseInt(currentGroupId),total_laps:currentTotalLaps,tag_map:buildTagMap(),race_config:raceConfig,track_csv:currentTrackCSV,checkpoints_required:CHECKPOINTS_REQUIRED});
       appendFeed([`▶ Group ${currentGroupId} LIVE – ${currentTotalLaps} laps, ${CHECKPOINTS_REQUIRED} CPs/lap`]);
       renderPlayers();
-      updateFinaleButton();
      
     }
 
@@ -2049,7 +2028,7 @@
       opt.dataset.status='finished'; opt.textContent=opt.textContent.replace(/\s*\[.*?\]\s*$/,'')+' [finished]';
       sendWS({type:'reset'}); appendFeed(['⏹ Race finished']);
       Object.keys(tagData).forEach(tid=>{tagData[tid].trail=[];tagData[tid].lapInfo=null;tagData[tid].lapStartTime=null;});
-      liveLeaderboard=[]; cpTouches={}; renderLeaderboard(); renderCpPanel(); refreshCollisionStats(); resetAllEma(); reassignMode=true; updateButtons();  updateFinaleButton(); renderPlayers();
+      liveLeaderboard=[]; cpTouches={}; renderLeaderboard(); renderCpPanel(); refreshCollisionStats(); resetAllEma(); reassignMode=true; updateButtons(); renderPlayers();
     }
 
     function doRestart() {
