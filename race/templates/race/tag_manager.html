@@ -1191,6 +1191,7 @@
       updateTag:  BASE + '/api/update-tag-id/',
       markLive:   BASE + '/api/mark-group-live/',
       markFinish: BASE + '/api/mark-group-finished/',
+      resetGroup: BASE + '/api/reset-group/',
     };
 
     const CHECKPOINTS_REQUIRED = 5;
@@ -1719,7 +1720,7 @@
                     const _t=parseInt(_p.tag_id,10);
                     if (!isNaN(_t)&&tagData[_t]) {
                       tagData[_t].lapStartTime=Date.now();
-                      if (tagData[_t].lapInfo) { tagData[_t].lapInfo.checkpoints_hit=0; if (tagData[_t].lapInfo.current_lap) tagData[_t].lapInfo.current_lap=ev.lap+1; }
+                      if (tagData[_t].lapInfo) { tagData[_t].lapInfo.checkpoints_hit=0; tagData[_t].lapInfo._cpSet=new Set(); if (tagData[_t].lapInfo.current_lap) tagData[_t].lapInfo.current_lap=ev.lap+1; }
                       setTimeout(renderPlayers,10);
                     }
                   }
@@ -1729,13 +1730,13 @@
                 }
                 if (ev.type==='race_start') {
                   const _p=players.find(p=>p.player_name===ev.car_name);
-                  if (_p&&_p.tag_id!==null) { const _t=parseInt(_p.tag_id,10); if (!isNaN(_t)) { if (!tagData[_t]) tagData[_t]={x:0,y:0,trail:[],lastTime:0,speed:0,lapInfo:null,lapStartTime:null,wallHits:0,carHits:0}; tagData[_t].lapStartTime=Date.now(); if (!tagData[_t].lapInfo) tagData[_t].lapInfo={}; tagData[_t].lapInfo.is_racing=true; tagData[_t].lapInfo.current_lap=ev.lap||1; tagData[_t].lapInfo.total_laps=currentTotalLaps; tagData[_t].lapInfo.checkpoints_hit=0; tagData[_t].lapInfo.checkpoints_total=CHECKPOINTS_REQUIRED; setTimeout(renderPlayers,10); } }
+                  if (_p&&_p.tag_id!==null) { const _t=parseInt(_p.tag_id,10); if (!isNaN(_t)) { if (!tagData[_t]) tagData[_t]={x:0,y:0,trail:[],lastTime:0,speed:0,lapInfo:null,lapStartTime:null,wallHits:0,carHits:0}; tagData[_t].lapStartTime=Date.now(); if (!tagData[_t].lapInfo) tagData[_t].lapInfo={}; tagData[_t].lapInfo.is_racing=true; tagData[_t].lapInfo.current_lap=ev.lap||1; tagData[_t].lapInfo.total_laps=currentTotalLaps; tagData[_t].lapInfo.checkpoints_hit=0; tagData[_t].lapInfo._cpSet=new Set(); tagData[_t].lapInfo.checkpoints_total=CHECKPOINTS_REQUIRED; setTimeout(renderPlayers,10); } }
                   return `START  ${ev.car_name}`;
                 }
                 if (ev.type==='checkpoint') {
                   if (ev.cp_index!=null&&ev.cp_touches) { cpTouches[String(ev.cp_index)]=ev.cp_touches; renderCpPanel(); }
                   const _p=players.find(p=>p.player_name===ev.car_name);
-                  if (_p&&_p.tag_id!==null) { const _t=parseInt(_p.tag_id,10); if (!isNaN(_t)&&tagData[_t]?.lapInfo) tagData[_t].lapInfo.checkpoints_hit=ev.cp_index+1; }
+                  if (_p&&_p.tag_id!==null) { const _t=parseInt(_p.tag_id,10); if (!isNaN(_t)&&tagData[_t]?.lapInfo) { if (!tagData[_t].lapInfo._cpSet) tagData[_t].lapInfo._cpSet=new Set(); tagData[_t].lapInfo._cpSet.add(ev.cp_index); tagData[_t].lapInfo.checkpoints_hit=tagData[_t].lapInfo._cpSet.size; } }
                   return `CP${ev.cp_index}  ${ev.car_name}`;
                 }
                 if (ev.type==='race_finish') return `FINISH  ${ev.car_name}`;
@@ -2085,6 +2086,17 @@
 
       closeTagModal();
       
+      // Delete all lap records for this group before restarting
+      try {
+        await fetch(API.resetGroup, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRF() },
+          credentials: 'include',
+          body: JSON.stringify({ group_id: currentGroupId }),
+        });
+      } catch(e) {
+        console.warn('[ResetGroup] Failed to delete lap records:', e);
+      }
 
       // Reset engines, THEN re-arm with the track CSV + new tag map.
       // (A bare 'reset' alone never loads track_csv on the bridge side,

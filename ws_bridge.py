@@ -54,7 +54,7 @@ JUMP_THRESHOLD_CM = 150.0   # L1: reject per-anchor jump larger than this.
                              # (measured from field logs); genuine
                              # multipath/NLOS spikes are 300cm+. 150cm
                              # comfortably separates the two.
-MEDIAN_WINDOW     = 9       # L2: rolling median window per anchor —
+MEDIAN_WINDOW     = 15       # L2: rolling median window per anchor —
                              # widened from 5 → 9 (≈270ms of history at
                              # the hardware's ~30ms/anchor cycle) for
                              # heavier smoothing of per-anchor range
