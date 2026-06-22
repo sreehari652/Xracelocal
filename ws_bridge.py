@@ -173,6 +173,7 @@ TRAIL_LENGTH = 30
 TAG_TIMEOUT  = 5
 
 checkpoint_touch_history: dict = {}
+checkpoint_active_lap:    dict = {}  # cp_idx -> [{car_id, car_name}], current lap only, cleared per car on lap done
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -907,11 +908,17 @@ class LapEngine:
             self._in_sf_zone = False   # left the zone, ready to re-trigger next time
         return None
 
+    def _clear_active_lap(self):
+        """Remove this car's dots from all checkpoint active-lap entries."""
+        for cp_list in checkpoint_active_lap.values():
+            cp_list[:] = [t for t in cp_list if t['car_id'] != self.car_id]
+
     def _process_crossing(self, now):
         if not self.is_racing:
             self.is_racing = True; self.current_lap = 1
             self._lap_start = now; self._cp_touched_this_lap = set()
             self.current_lap_cp_hits = []
+            self._clear_active_lap()
             self.scoring.open_lap(self.car_id, 1)
             print(f"🏁 START | {self.car_name} Lap 1/{TOTAL_LAPS}")
             return dict(type='race_start', car_id=self.car_id, car_name=self.car_name, lap=1, time=now)
@@ -922,6 +929,7 @@ class LapEngine:
             print(f"⚠ LAP VOID | {self.car_name} — {missing} CP(s) not hit (missing: {missing_idx})")
             self._cp_touched_this_lap = set()
             self.current_lap_cp_hits = []
+            self._clear_active_lap()
             return None
 
         raw = now - self._lap_start
@@ -929,6 +937,7 @@ class LapEngine:
         self._lap_times.append(raw); self.laps_done += 1
         self._cp_touched_this_lap = set()
         self.current_lap_cp_hits = []
+        self._clear_active_lap()
         ev = dict(type='lap_done', car_id=self.car_id, car_name=self.car_name,
                   lap=self.current_lap, raw_time=raw, elp=ls.elp, time=now)
 
@@ -947,16 +956,9 @@ class LapEngine:
         return ev
 
     def _check_checkpoints(self, x, y, now):
-        # Order-independent: scan ALL checkpoints every update. Any
-        # checkpoint not yet touched this lap that the tag is currently
-        # within range of gets marked touched and lights up immediately —
-        # regardless of which order checkpoints are touched in.
         for idx, (cx, cy, cr) in enumerate(CHECKPOINTS):
             if idx in self._cp_touched_this_lap:
                 continue
-            # Be forgiving: never let a checkpoint's effective radius be
-            # smaller than CP_MIN_RADIUS, so "touch anywhere near it"
-            # works even if the CSV defines a tiny radius for that point.
             eff_r = max(cr, CP_MIN_RADIUS)
             dist = math.hypot(x-cx, y-cy)
             if dist <= eff_r:
@@ -966,18 +968,29 @@ class LapEngine:
                       f"dist={dist:.1f}cm (r={eff_r:.0f}cm) "
                       f"[{len(self._cp_touched_this_lap)}/{len(CHECKPOINTS)}]")
 
+                # All-time history (sidebar panel)
                 if idx not in checkpoint_touch_history:
                     checkpoint_touch_history[idx] = []
-                checkpoint_touch_history[idx].append({
-                    "car_id":   self.car_id,
-                    "car_name": self.car_name,
-                    "lap":      self.current_lap,
-                    "time":     now,
+                if not any(t['car_id'] == self.car_id for t in checkpoint_touch_history[idx]):
+                    checkpoint_touch_history[idx].append({
+                        "car_id": self.car_id, "car_name": self.car_name,
+                        "lap": self.current_lap, "time": now,
+                    })
+
+                # Active-lap tracking (canvas dots — resets per car per lap)
+                if idx not in checkpoint_active_lap:
+                    checkpoint_active_lap[idx] = []
+                checkpoint_active_lap[idx] = [
+                    t for t in checkpoint_active_lap[idx] if t['car_id'] != self.car_id
+                ]
+                checkpoint_active_lap[idx].append({
+                    "car_id": self.car_id, "car_name": self.car_name,
                 })
 
                 return dict(type='checkpoint', car_id=self.car_id, car_name=self.car_name,
                             cp_index=idx, total=len(CHECKPOINTS),
-                            cp_touches=checkpoint_touch_history.get(idx, []))
+                            cp_touches=checkpoint_touch_history.get(idx, []),
+                            cp_active=checkpoint_active_lap.get(idx, []))
         return None
 
     def elapsed(self, now):
@@ -1215,7 +1228,7 @@ def build_state(now):
         track=current_track.to_dict(),
         cars=cars, leaderboard=race_mgr.get_leaderboard(),
         feed=scoring.get_feed(10),
-        checkpoint_touches=_serialize_cp_touches()))
+        checkpoint_touches=_serialize_cp_touches(), cp_active_lap=_serialize_cp_active()))
 
 
 def _serialize_cp_touches() -> dict:
@@ -1225,6 +1238,19 @@ def _serialize_cp_touches() -> dict:
             {"car_id": t["car_id"], "car_name": t["car_name"], "lap": t["lap"]}
             for t in touches
         ]
+    return result
+
+
+def _serialize_cp_active() -> dict:
+    """Per-lap active touches: only cars that touched this CP this lap.
+    Resets per car when their lap completes. Used by canvas dot coloring."""
+    result = {}
+    for cp_id, touches in checkpoint_active_lap.items():
+        if touches:
+            result[str(cp_id)] = [
+                {"car_id": t["car_id"], "car_name": t["car_name"]}
+                for t in touches
+            ]
     return result
 
 
@@ -1307,7 +1333,7 @@ def udp_receiver():
                     current_penalty=round(open_lap._pen,2) if open_lap else 0.0,
                     current_bonus=round(open_lap._bon,2) if open_lap else 0.0,
                     lap_info=li,
-                    checkpoint_touches=_serialize_cp_touches()))
+                    checkpoint_touches=_serialize_cp_touches(), cp_active_lap=_serialize_cp_active()))
                 asyncio.run_coroutine_threadsafe(broadcast(msg), event_loop)
             if game_evts:
                 asyncio.run_coroutine_threadsafe(broadcast(build_state(now)), event_loop)
@@ -1396,7 +1422,7 @@ async def handle_client(ws):
                     else:
                         print("[TRACK] No track_csv — using current/default track")
 
-                    checkpoint_touch_history.clear()
+                    checkpoint_touch_history.clear(); checkpoint_active_lap.clear()
                     race_mgr.reset(); race_mgr.admin_start(); race_armed = True
 
                     await broadcast(json.dumps(dict(
@@ -1415,7 +1441,7 @@ async def handle_client(ws):
                 elif mt == 'reset':
                     race_mgr.reset(); col_eng.reset(); race_armed = False
                     tag_to_gp = {}; current_group_id = None
-                    checkpoint_touch_history.clear()
+                    checkpoint_touch_history.clear(); checkpoint_active_lap.clear()
                     for t in tags.values(): t.reset()
                     reset_race_config()
                     await broadcast(json.dumps(dict(type="admin_event", event="race_reset",
