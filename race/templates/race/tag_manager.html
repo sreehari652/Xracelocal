@@ -1106,6 +1106,9 @@
     
   </div>
 
+
+  
+
   <div id="wallToast" style="position:fixed;bottom:20px;right:20px;z-index:9999;background:#0d1117;border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-family:'Rajdhani',sans-serif;font-size:.85rem;font-weight:600;color:var(--text);display:none;box-shadow:0 4px 24px rgba(0,0,0,0.5);transition:opacity .3s;max-width:320px;"></div>
 
   <div id="dbgBar">
@@ -1267,7 +1270,8 @@
     let raceConfig = { total_laps: 10, collision_absorbing_time: null, collision_creating_time: null, object_collision_time: null };
     let liveTrack = { center: [], inner: [], outer: [], checkpoints: [], start_finish: { x: 490, y1: 300, y2: 340, dir: 'left_to_right' } };
     let players = [], tagData = {}, reassignMode = false, liveLeaderboard = [], packetsThisSec = 0, totalPackets = 0;
-    let cpTouches = {};
+    let cpTouches = {};      // sidebar panel: all-time history per CP
+    let cpActiveLap = {};    // canvas dots: only cars active THIS lap per CP, resets per car on lap done
 
     // ═══════════════════════════════════════════════════════════
     // RAW SECTION TOGGLE
@@ -1487,31 +1491,42 @@
       if (liveTrack.checkpoints.length) {
         liveTrack.checkpoints.forEach((cp, idx) => {
           const p = tp(cp.x, cp.y);
-          const radiusPx = cp.r * cScale;
-          const touches = cpTouches[String(idx)] || cpTouches[idx] || [];
-          const hitters = new Set(touches.map(t => t.car_id));
-          const isHit = hitters.size > 0;
-          const isRequired = idx < CHECKPOINTS_REQUIRED;
-          ctx.save(); ctx.globalAlpha=isHit?0.22:(isRequired?0.10:0.04);
-          ctx.fillStyle=isHit?'#00ff88':(isRequired?'#ffffff':'#888888');
-          ctx.beginPath(); ctx.arc(p.px,p.py,radiusPx,0,Math.PI*2); ctx.fill(); ctx.restore();
-          ctx.save(); if (!isHit) ctx.setLineDash([4,3]);
-          ctx.strokeStyle=isHit?'rgba(0,255,136,0.7)':(isRequired?'rgba(255,255,255,0.28)':'rgba(128,128,128,0.15)');
-          ctx.lineWidth=isHit?2:1.5; if (isHit) { ctx.shadowColor='#00ff88'; ctx.shadowBlur=8; }
-          ctx.beginPath(); ctx.arc(p.px,p.py,radiusPx,0,Math.PI*2); ctx.stroke();
-          ctx.setLineDash([]); ctx.shadowBlur=0; ctx.restore();
-          ctx.fillStyle=isHit?'rgba(0,255,136,0.9)':(isRequired?'rgba(255,255,255,0.45)':'rgba(128,128,128,0.25)');
-          ctx.font='bold 9px JetBrains Mono,monospace'; ctx.textAlign='center';
-          ctx.fillText('CP'+idx, p.px, p.py+3);
-          if (isHit) {
-            const hitterArr=[...hitters];
-            hitterArr.forEach((car_id, di) => {
-              const pIdx = players.findIndex(pl => pl.tag_id!==null && parseInt(pl.tag_id,10)===car_id);
-              const col = COLORS[(pIdx>=0?pIdx:car_id)%COLORS.length];
-              const dotR=4, angle=(di/hitterArr.length)*Math.PI*2-Math.PI/2;
-              const dx=Math.cos(angle)*(radiusPx+8), dy=Math.sin(angle)*(radiusPx+8);
-              ctx.save(); ctx.fillStyle=col; ctx.shadowColor=col; ctx.shadowBlur=6;
-              ctx.beginPath(); ctx.arc(p.px+dx,p.py+dy,dotR,0,Math.PI*2); ctx.fill(); ctx.restore();
+          const radiusPx = Math.max(cp.r * cScale, 14);
+
+          // Always draw the checkpoint circle in a neutral, quiet style —
+          // no green glow or fill changes based on hit state.
+          ctx.save();
+          ctx.globalAlpha = 0.18;
+          ctx.fillStyle = '#ffffff';
+          ctx.beginPath(); ctx.arc(p.px, p.py, radiusPx, 0, Math.PI*2); ctx.fill();
+          ctx.restore();
+          ctx.save();
+          ctx.setLineDash([4, 3]);
+          ctx.strokeStyle = 'rgba(255,255,255,0.30)';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath(); ctx.arc(p.px, p.py, radiusPx, 0, Math.PI*2); ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.restore();
+          ctx.fillStyle = 'rgba(255,255,255,0.5)';
+          ctx.font = 'bold 9px JetBrains Mono,monospace'; ctx.textAlign = 'center';
+          ctx.fillText('CP' + idx, p.px, p.py + 3);
+
+          // Small colored dots on the rim — one per car that has touched
+          // this CP this lap. Resets automatically when their lap completes.
+          const activeTouches = cpActiveLap[String(idx)] || [];
+          if (activeTouches.length > 0) {
+            activeTouches.forEach((t, di) => {
+              const pIdx = players.findIndex(pl => pl.tag_id !== null && parseInt(pl.tag_id, 10) === t.car_id);
+              const col = COLORS[(pIdx >= 0 ? pIdx : t.car_id) % COLORS.length];
+              const angle = (di / activeTouches.length) * Math.PI * 2 - Math.PI / 2;
+              const dx = Math.cos(angle) * (radiusPx + 7);
+              const dy = Math.sin(angle) * (radiusPx + 7);
+              ctx.save();
+              ctx.fillStyle = col;
+              ctx.shadowColor = col;
+              ctx.shadowBlur = 8;
+              ctx.beginPath(); ctx.arc(p.px + dx, p.py + dy, 5, 0, Math.PI * 2); ctx.fill();
+              ctx.restore();
             });
           }
         });
@@ -1672,6 +1687,7 @@
           // During a race, cpTouches is owned by JS via checkpoint game events so the
           // server's global history (which never resets per-lap) doesn't repopulate dots.
           if (msg.checkpoint_touches && Object.keys(cpTouches).length===0) { cpTouches=msg.checkpoint_touches; renderCpPanel(); }
+          if (msg.cp_active_lap) { cpActiveLap = msg.cp_active_lap; }
           if (msg.race_config) {
             if (msg.race_config.wall_hit_penalty!=null)  raceConfig.object_collision_time=msg.race_config.wall_hit_penalty;
             if (msg.race_config.attacker_penalty!=null)  raceConfig.collision_creating_time=msg.race_config.attacker_penalty;
@@ -1741,6 +1757,10 @@
                       if (tagData[_t].lapInfo) { tagData[_t].lapInfo.checkpoints_hit=0; tagData[_t].lapInfo._cpSet=new Set(); if (tagData[_t].lapInfo.current_lap) tagData[_t].lapInfo.current_lap=ev.lap+1; }
                       setTimeout(renderPlayers,10);
                     }
+                    // Clear this car's dots from all checkpoints on lap done
+                    Object.keys(cpActiveLap).forEach(cpIdx => {
+                      cpActiveLap[cpIdx] = (cpActiveLap[cpIdx]||[]).filter(t => t.car_id !== parseInt(_p.tag_id,10));
+                    });
                   }
                   cpTouches={}; renderCpPanel();
                   if (ev.elp!=null) { const _pid=_p?parseInt(_p.tag_id,10):null; let lb=liveLeaderboard.find(r=>r.car_id===_pid); if (!lb) { lb={car_id:_pid,best_elp:Infinity,best_raw:Infinity,laps_done:0}; liveLeaderboard.push(lb); } if (ev.elp<lb.best_elp) lb.best_elp=ev.elp; lb.laps_done=(lb.laps_done||0)+1; }
@@ -1749,12 +1769,23 @@
                 }
                 if (ev.type==='race_start') {
                   const _p=players.find(p=>p.player_name===ev.car_name);
-                  if (_p&&_p.tag_id!==null) { const _t=parseInt(_p.tag_id,10); if (!isNaN(_t)) { if (!tagData[_t]) tagData[_t]={x:0,y:0,trail:[],lastTime:0,speed:0,lapInfo:null,lapStartTime:null,wallHits:0,carHits:0}; tagData[_t].lapStartTime=Date.now(); if (!tagData[_t].lapInfo) tagData[_t].lapInfo={}; tagData[_t].lapInfo.is_racing=true; tagData[_t].lapInfo.current_lap=ev.lap||1; tagData[_t].lapInfo.total_laps=currentTotalLaps; tagData[_t].lapInfo.checkpoints_hit=0; tagData[_t].lapInfo._cpSet=new Set(); tagData[_t].lapInfo.checkpoints_total=CHECKPOINTS_REQUIRED; setTimeout(renderPlayers,10); } }
+                  if (_p&&_p.tag_id!==null) {
+                    const _t=parseInt(_p.tag_id,10);
+                    if (!isNaN(_t)) { if (!tagData[_t]) tagData[_t]={x:0,y:0,trail:[],lastTime:0,speed:0,lapInfo:null,lapStartTime:null,wallHits:0,carHits:0}; tagData[_t].lapStartTime=Date.now(); if (!tagData[_t].lapInfo) tagData[_t].lapInfo={}; tagData[_t].lapInfo.is_racing=true; tagData[_t].lapInfo.current_lap=ev.lap||1; tagData[_t].lapInfo.total_laps=currentTotalLaps; tagData[_t].lapInfo.checkpoints_hit=0; tagData[_t].lapInfo._cpSet=new Set(); tagData[_t].lapInfo.checkpoints_total=CHECKPOINTS_REQUIRED; setTimeout(renderPlayers,10); }
+                    // Clear this car's dots from all checkpoints on new race start
+                    Object.keys(cpActiveLap).forEach(cpIdx => {
+                      cpActiveLap[cpIdx] = (cpActiveLap[cpIdx]||[]).filter(t => t.car_id !== parseInt(_p.tag_id,10));
+                    });
+                  }
                   cpTouches={}; renderCpPanel();
                   return `START  ${ev.car_name}`;
                 }
                 if (ev.type==='checkpoint') {
                   if (ev.cp_index!=null&&ev.cp_touches) { cpTouches[String(ev.cp_index)]=ev.cp_touches; renderCpPanel(); }
+                  // Update active-lap dot for this car at this checkpoint
+                  if (ev.cp_index!=null && ev.cp_active) {
+                    cpActiveLap[String(ev.cp_index)] = ev.cp_active;
+                  }
                   const _p=players.find(p=>p.player_name===ev.car_name);
                   if (_p&&_p.tag_id!==null) { const _t=parseInt(_p.tag_id,10); if (!isNaN(_t)&&tagData[_t]?.lapInfo) { if (!tagData[_t].lapInfo._cpSet) tagData[_t].lapInfo._cpSet=new Set(); tagData[_t].lapInfo._cpSet.add(ev.cp_index); tagData[_t].lapInfo.checkpoints_hit=tagData[_t].lapInfo._cpSet.size; } }
                   return `CP${ev.cp_index}  ${ev.car_name}`;
@@ -1769,7 +1800,7 @@
           }
           if (msg.type==='admin_event') {
             if (msg.event==='race_reset') {
-              cpTouches={}; renderCpPanel(); resetAllEma();
+              cpTouches={}; cpActiveLap={}; renderCpPanel(); resetAllEma();
             }
             appendFeed([`[${msg.event}] ${msg.message}`]); return;
           }
@@ -2017,7 +2048,7 @@
       currentGroupStatus='live'; reassignMode=false; setBadge('live'); updateButtons();
       const opt=document.getElementById('gSel').options[document.getElementById('gSel').selectedIndex];
       opt.dataset.status='live'; opt.textContent=opt.textContent.replace(/\s*\[.*?\]\s*$/,'')+' [live]';
-      cpTouches={}; renderCpPanel(); resetAllEma();
+      cpTouches={}; cpActiveLap={}; renderCpPanel(); resetAllEma();
       await pushScreen('counter');
       sendWS({type:'admin_start',group_id:parseInt(currentGroupId),total_laps:currentTotalLaps,tag_map:buildTagMap(),race_config:raceConfig,track_csv:currentTrackCSV,checkpoints_required:CHECKPOINTS_REQUIRED});
       appendFeed([`▶ Group ${currentGroupId} LIVE – ${currentTotalLaps} laps, ${CHECKPOINTS_REQUIRED} CPs/lap`]);
