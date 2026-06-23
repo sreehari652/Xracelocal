@@ -156,8 +156,12 @@ current_group_id: int | None = None
 
 CORNER_CUT_PENALTY         = 3.0
 CORNER_CUT_VOID_LAP        = False
-CAR_COLLISION_DISTANCE_M   = 25.0
+CAR_COLLISION_DISTANCE_M   = 25.0   # fallback centre-to-centre pre-check
 CAR_COLLISION_COOLDOWN     = 1.0
+
+# Physical car dimensions in CENTIMETRES (F1-style RC car, tag at centre)
+CAR_LENGTH_CM = 40.0
+CAR_WIDTH_CM  =  6.0
 SPEED_DIFF_THRESHOLD       = 10.0
 WALL_TOLERANCE_M           = 5.0
 WALL_COLLISION_COOLDOWN    = 0.5
@@ -1067,12 +1071,45 @@ class RaceManager:
 # COLLISION ENGINE
 # ═══════════════════════════════════════════════════════════════════════
 
+def _car_corners(x, y, heading):
+    """Return 4 corners of the car rectangle in track-space (cm),
+    given tag position (x,y) as the rectangle centre and heading in radians."""
+    hl = CAR_LENGTH_CM / 2
+    hw = CAR_WIDTH_CM  / 2
+    cos_h, sin_h = math.cos(heading), math.sin(heading)
+    # local corners: (±hl, ±hw), rotated by heading
+    offsets = [( hl,  hw), ( hl, -hw), (-hl, -hw), (-hl,  hw)]
+    return [(x + cos_h*dx - sin_h*dy, y + sin_h*dx + cos_h*dy)
+            for dx, dy in offsets]
+
+
+def _obb_overlap(cx1, cy1, h1, cx2, cy2, h2):
+    """Separating Axis Theorem test for two OBBs (oriented bounding boxes).
+    Returns True if the two car rectangles overlap."""
+    def axes(h):
+        return [(math.cos(h), math.sin(h)), (-math.sin(h), math.cos(h))]
+
+    def project(corners, ax):
+        dots = [ax[0]*c[0] + ax[1]*c[1] for c in corners]
+        return min(dots), max(dots)
+
+    c1 = _car_corners(cx1, cy1, h1)
+    c2 = _car_corners(cx2, cy2, h2)
+    for ax in axes(h1) + axes(h2):
+        lo1, hi1 = project(c1, ax)
+        lo2, hi2 = project(c2, ax)
+        if hi1 < lo2 or hi2 < lo1:
+            return False   # separating axis found — no overlap
+    return True            # no separating axis — rectangles overlap
+
+
 class CollisionEngine:
     def __init__(self, sc, trk):
         self.scoring = sc; self.track = trk
         self._names = {}; self._pos = {}; self._speeds = {}
         self._laps = {}; self._racing = {}
         self._car_cd = {}; self._wall_cd = {}
+        self._heading = {}   # last known heading per car (radians)
         self.events = []; self.anomalies = []
 
     def register(self, cid, name): self._names[cid] = name
@@ -1081,7 +1118,13 @@ class CollisionEngine:
     def update(self, cars, now):
         evts = []
         for cid, d in cars.items():
-            self._pos[cid] = (d['x'], d['y'], now)
+            px, py = d['x'], d['y']
+            prev = self._pos.get(cid)
+            if prev:
+                dx, dy = px - prev[0], py - prev[1]
+                if math.hypot(dx, dy) > 0.3:   # only update heading if moving
+                    self._heading[cid] = math.atan2(dy, dx)
+            self._pos[cid] = (px, py, now)
             self._speeds[cid] = d.get('speed', 0.0)
             self._laps[cid] = d.get('lap', 0)
             self._racing[cid] = d.get('racing', False)
@@ -1104,10 +1147,14 @@ class CollisionEngine:
     def _car(self, a, b, now):
         pa = self._pos.get(a); pb = self._pos.get(b)
         if not pa or not pb: return None
+        # Quick centre-to-centre pre-check (cheap reject before OBB test)
         dist = math.hypot(pa[0]-pb[0], pa[1]-pb[1])
-        if dist > CAR_COLLISION_DISTANCE_M: return None
+        if dist > CAR_LENGTH_CM + 10: return None   # definitely not touching
         key = frozenset([a, b])
         if now - self._car_cd.get(key, 0) < CAR_COLLISION_COOLDOWN: return None
+        # Full OBB overlap test using actual car rectangles
+        ha = self._heading.get(a, 0); hb = self._heading.get(b, 0)
+        if not _obb_overlap(pa[0], pa[1], ha, pb[0], pb[1], hb): return None
         self._car_cd[key] = now
         sa = self._speeds.get(a, 0); sb = self._speeds.get(b, 0)
         atk, vic = ((a, b) if abs(sa-sb) >= SPEED_DIFF_THRESHOLD and sa >= sb
@@ -1115,7 +1162,7 @@ class CollisionEngine:
         self.scoring.car_collision(atk, vic)
         an = self._names.get(atk, f"Car{atk}"); vn = self._names.get(vic, f"Car{vic}")
         if PRINT_COLLISION_EVENTS:
-            print(f"💥 CAR | {an}→{vn} dist={dist:.3f}cm  "
+            print(f"💥 CAR | {an}→{vn} dist={dist:.1f}cm  "
                   f"atk+{CAR_COLLISION_ATTACKER_PENALTY}s / vic-{CAR_COLLISION_VICTIM_BONUS}s")
         return dict(type='car', attacker=atk, victim=vic,
                     attacker_name=an, victim_name=vn, dist=round(dist, 3),
@@ -1124,10 +1171,19 @@ class CollisionEngine:
     def _wall(self, cid, x, y, lap, now):
         if not self.track or not self.track.has_width(): return None
         if now - self._wall_cd.get(cid, 0) < WALL_COLLISION_COOLDOWN: return None
-        od = dist_to_boundary(x, y, self.track.get_outer_points())
-        id_ = dist_to_boundary(x, y, self.track.get_inner_points())
-        wall = ('outer' if od <= WALL_TOLERANCE_M else
-                ('inner' if id_ <= WALL_TOLERANCE_M else None))
+        heading = self._heading.get(cid, 0)
+        corners = _car_corners(x, y, heading)
+        # Check if ANY corner of the car rectangle is outside the track boundary
+        outer_pts = self.track.get_outer_points()
+        inner_pts = self.track.get_inner_points()
+        wall = None
+        for cx, cy in corners:
+            od = dist_to_boundary(cx, cy, outer_pts)
+            id_ = dist_to_boundary(cx, cy, inner_pts)
+            if od <= WALL_TOLERANCE_M:
+                wall = 'outer'; break
+            if id_ <= WALL_TOLERANCE_M:
+                wall = 'inner'; break
         if not wall: return None
         self._wall_cd[cid] = now
         self.scoring.wall_hit(cid)
