@@ -1007,6 +1007,13 @@
     <button class="btn btn-live" id="btnLive" onclick="doLive()" disabled>▶ Live</button>
     <button class="btn btn-finish" id="btnFinish" onclick="doFinish()" disabled>⏹ Finish</button>
     <button class="btn btn-restart" id="btnRestart" onclick="doRestart()" disabled>↺ Restart</button>
+    <select id="smoothSel" onchange="changeSmoothing()">
+      <option value="raw">Smoothing: Raw</option>
+      <option value="low">Smoothing: Low (Lag ~30ms)</option>
+      <option value="medium">Smoothing: Medium (Lag ~80ms)</option>
+      <option value="high" selected>Smoothing: High (Lag ~150ms)</option>
+      <option value="ultra">Smoothing: Ultra (Lag ~300ms)</option>
+    </select>
     <span class="ws-pill ws-fail" id="wsPill">● WS</span>
   </div>
 
@@ -1211,48 +1218,43 @@
     ];
 
     const COLORS = ['#00d4ff','#ff3b5c','#00ff88','#ffd700','#a855f7','#ff6b35','#00ffcc','#ff9ff3'];
-
     // ═══════════════════════════════════════════════════════════
     // JS-SIDE SNAP-EMA FILTER  (Layer 4 — canvas rendering only)
     // ═══════════════════════════════════════════════════════════
     //
-    // The Python bridge already runs L1 spike rejection, L2 median
-    // (window=9), and a heavily-tuned L3 Kalman filter (Q=0.15, R=30)
-    // before transmitting — residual frame-to-frame jitter after all
-    // that is typically ~1-2cm for a stationary tag. A plain fixed-alpha
-    // EMA on top of that would smooth the residual jitter further, but
-    // it would also delay genuine fast movement (cornering, acceleration)
-    // by several frames, which is exactly the lag problem the backend
-    // retune was meant to avoid living with twice.
-    //
-    // This filter avoids that tradeoff: small frame-to-frame changes
-    // (≤ SNAP_THRESHOLD_CM) are treated as residual jitter and smoothed
-    // with an EMA; anything larger is treated as real movement and
-    // passed through immediately with zero added lag.
+    // This filter handles visual smoothing using a frame-rate independent
+    // exponential decay based on the browser's actual frame delta time (dt).
+    // The user can select the smoothing strength dynamically. Small frame-
+    // to-frame changes are smoothed continuously, and the snap threshold is
+    // set high enough to only trigger on teleports (e.g. restarts or resets)
+    // to prevent sudden jumps/jitters.
     // ──────────────────────────────────────────────────────────
-    const EMA_ALPHA          = 0.5;   // smoothing strength for small jitter
-    const SNAP_THRESHOLD_CM  = 40.0;  // jumps above this bypass smoothing entirely
+    let EMA_K              = 6.0;   // Dynamic smoothing coefficient (default: High)
+    let SNAP_THRESHOLD_CM  = 150.0; // Jumps above this bypass smoothing (restarts)
+    let serverFilterInfo   = { Q: 0.15, R: 30 }; // default display values
 
     // emaState[tag_id] = { x, y }
     const emaState = {};
 
-    function emaSmooth(tid, rawX, rawY) {
+    function emaSmooth(tid, rawX, rawY, dt) {
       const s = emaState[tid];
       if (!s) {
         emaState[tid] = { x: rawX, y: rawY };
-        return { x: rawX, y: rawY };
+        return emaState[tid];
       }
       const dist = Math.hypot(rawX - s.x, rawY - s.y);
       if (dist > SNAP_THRESHOLD_CM) {
-        // Real movement — snap straight to it, no smoothing lag.
+        // Real movement teleport / reset
         s.x = rawX; s.y = rawY;
-        return { x: rawX, y: rawY };
+        return s;
       }
-      s.x = EMA_ALPHA * rawX + (1 - EMA_ALPHA) * s.x;
-      s.y = EMA_ALPHA * rawY + (1 - EMA_ALPHA) * s.y;
-      return { x: s.x, y: s.y };
+      // Frame-rate independent exponential decay:
+      // current = current + (target - current) * (1 - e^(-k * dt))
+      const t = 1 - Math.exp(-EMA_K * dt);
+      s.x += (rawX - s.x) * t;
+      s.y += (rawY - s.y) * t;
+      return s;
     }
-
     function resetEma(tid) {
       delete emaState[tid];
     }
@@ -1421,11 +1423,19 @@
         ctx.closePath(); ctx.fillStyle='rgba(255,255,255,0.18)'; ctx.fill(); ctx.restore();
       }
     }
-
     // ═══════════════════════════════════════════════════════════
-    // DRAW LOOP  — uses snap-EMA smoothed positions for rendering
+    // DRAW LOOP — uses frame-rate independent exponential smoothing
     // ═══════════════════════════════════════════════════════════
+    let lastDrawTime = performance.now();
     function draw() {
+      const nowPerf = performance.now();
+      let dt = (nowPerf - lastDrawTime) / 1000;
+      lastDrawTime = nowPerf;
+
+      // Clamp dt to avoid huge jumps on tab switch/suspend
+      if (dt > 0.2) dt = 0.2;
+      if (dt < 0.001) dt = 0.001;
+
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.fillStyle = '#0e1a0e'; ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.fillStyle = 'rgba(255,255,255,0.012)';
@@ -1554,7 +1564,7 @@
         // ── Apply snap-EMA for canvas render ───────────────────────────
         // d.x / d.y = server-filtered values (used for game logic)
         // smoothed.x / smoothed.y = what we actually draw
-        const smoothed = emaSmooth(tid, d.x, d.y);
+        const smoothed = emaSmooth(tid, d.x, d.y, dt);
         const p = tp(smoothed.x, smoothed.y);
 
         const xs=ANC.map(a=>a.x), ys=ANC.map(a=>a.y);
@@ -1683,6 +1693,32 @@
     }
     draw();
 
+    function updateEmaDebugText() {
+      const mode = document.getElementById('smoothSel')?.value || 'high';
+      dbg('d_ema', `Q=${serverFilterInfo.Q} R=${serverFilterInfo.R} | K=${EMA_K} (${mode})`, 'hi');
+    }
+
+    function changeSmoothing() {
+      const val = document.getElementById('smoothSel').value;
+      if (val === 'raw') {
+        EMA_K = 100.0;
+        SNAP_THRESHOLD_CM = 40.0;
+      } else if (val === 'low') {
+        EMA_K = 25.0;
+        SNAP_THRESHOLD_CM = 60.0;
+      } else if (val === 'medium') {
+        EMA_K = 12.0;
+        SNAP_THRESHOLD_CM = 100.0;
+      } else if (val === 'high') {
+        EMA_K = 6.0;
+        SNAP_THRESHOLD_CM = 150.0;
+      } else if (val === 'ultra') {
+        EMA_K = 3.0;
+        SNAP_THRESHOLD_CM = 200.0;
+      }
+      updateEmaDebugText();
+    }
+
     // ═══════════════════════════════════════════════════════════
     // WEBSOCKET
     // ═══════════════════════════════════════════════════════════
@@ -1700,7 +1736,9 @@
             if (msg.track) applyLiveTrack(msg.track);
             if (msg.server_info && msg.server_info.filter) {
               const flt = msg.server_info.filter;
-              dbg('d_ema', `Q=${flt.l3_kalman_Q} R=${flt.l3_kalman_R} | α=${EMA_ALPHA}`, 'hi');
+              serverFilterInfo.Q = flt.l3_kalman_Q;
+              serverFilterInfo.R = flt.l3_kalman_R;
+              updateEmaDebugText();
             }
             return;
           }
@@ -2306,7 +2344,7 @@
     // INIT
     // ═══════════════════════════════════════════════════════════
     loadTournaments();
-    console.log('[XRace] ready — 4-layer filter: L1 spike|L2 median(w=9)|L3 Kalman dt-aware Q=0.15/R=30 (Python) + L4 snap-EMA α='+EMA_ALPHA+'/snap>'+SNAP_THRESHOLD_CM+'cm (JS canvas)');
+    console.log('[XRace] ready — 4-layer filter: L1 spike|L2 median|L3 Kalman dt-aware (Python) + L4 frame-rate independent EMA (JS canvas)');
   </script>
   <!-- ── Tag Assignment Modal ─────────────────────────────── -->
   <div id="tagModal">
