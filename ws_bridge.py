@@ -54,13 +54,11 @@ JUMP_THRESHOLD_CM = 150.0   # L1: reject per-anchor jump larger than this.
                              # (measured from field logs); genuine
                              # multipath/NLOS spikes are 300cm+. 150cm
                              # comfortably separates the two.
-MEDIAN_WINDOW     = 15       # L2: rolling median window per anchor —
-                             # widened from 5 → 9 (≈270ms of history at
-                             # the hardware's ~30ms/anchor cycle) for
-                             # heavier smoothing of per-anchor range
-                             # noise before it ever reaches trilateration
-                             # or the Kalman stage. Lag tradeoff accepted
-                             # since flicker reduction was prioritized.
+MEDIAN_WINDOW     = 7        # L2: rolling median window per anchor —
+                             # reduced from 15 to 7 (≈210ms of history)
+                             # to significantly reduce lag while still
+                             # successfully filtering range spikes and
+                             # single/double noise outliers.
 KALMAN_R          = 30.0    # L3: measurement noise covariance (cm²).
 KALMAN_Q          = 0.15    # L3: process noise covariance — heavy
                              # smoothing mode. The previous Q=12 traded
@@ -160,8 +158,7 @@ CAR_COLLISION_DISTANCE_M   = 25.0   # fallback centre-to-centre pre-check
 CAR_COLLISION_COOLDOWN     = 1.0
 
 # Physical car dimensions in CENTIMETRES (F1-style RC car, tag at centre)
-CAR_LENGTH_CM = 40.0
-CAR_WIDTH_CM  =  6.0
+CAR_SIZE_CM = 48.0
 SPEED_DIFF_THRESHOLD       = 10.0
 WALL_TOLERANCE_M           = 5.0
 WALL_COLLISION_COOLDOWN    = 0.5
@@ -278,11 +275,14 @@ class UWBFilter:
         ], dtype=float)
 
     @staticmethod
-    def _q_for_dt(dt: float) -> np.ndarray:
-        # Scale process noise with dt so longer gaps between packets
-        # widen the uncertainty proportionally instead of using a fixed
-        # value tuned for one specific (and often wrong) interval.
-        return np.eye(4) * (KALMAN_Q * dt / KALMAN_DT)
+    def _q_for_dt(dt: float, speed: float) -> np.ndarray:
+        # Scale process noise dynamically based on speed to reduce lag when moving
+        # fast and reduce jitter when stationary.
+        q_base = 0.05
+        q_speed_coeff = 0.03
+        q_max = 10.0
+        q_val = min(q_base + q_speed_coeff * speed, q_max)
+        return np.eye(4) * (q_val * dt / KALMAN_DT)
 
     def _l3(self, x: float, y: float, now: float | None = None) -> tuple[float, float]:
         if not self._kf_initialised:
@@ -311,8 +311,12 @@ class UWBFilter:
 
         dt = max(dt, KALMAN_DT_MIN)   # avoid divide-by-near-zero velocity blowups
 
+        vx = float(self._kf.x[2, 0])
+        vy = float(self._kf.x[3, 0])
+        speed = math.hypot(vx, vy)
+
         self._kf.F = self._f_for_dt(dt)
-        self._kf.Q = self._q_for_dt(dt)
+        self._kf.Q = self._q_for_dt(dt, speed)
         self._kf.predict()
         self._kf.update(np.array([[x], [y]]))
         self._last_kf_time = now
@@ -1072,13 +1076,12 @@ class RaceManager:
 # ═══════════════════════════════════════════════════════════════════════
 
 def _car_corners(x, y, heading):
-    """Return 4 corners of the car rectangle in track-space (cm),
-    given tag position (x,y) as the rectangle centre and heading in radians."""
-    hl = CAR_LENGTH_CM / 2
-    hw = CAR_WIDTH_CM  / 2
+    """Return 4 corners of the car square in track-space (cm),
+    given tag position (x,y) as the square centre and heading in radians."""
+    half_size = CAR_SIZE_CM / 2
     cos_h, sin_h = math.cos(heading), math.sin(heading)
-    # local corners: (±hl, ±hw), rotated by heading
-    offsets = [( hl,  hw), ( hl, -hw), (-hl, -hw), (-hl,  hw)]
+    # local corners: (±half_size, ±half_size), rotated by heading
+    offsets = [(half_size, half_size), (half_size, -half_size), (-half_size, -half_size), (-half_size, half_size)]
     return [(x + cos_h*dx - sin_h*dy, y + sin_h*dx + cos_h*dy)
             for dx, dy in offsets]
 
@@ -1119,11 +1122,8 @@ class CollisionEngine:
         evts = []
         for cid, d in cars.items():
             px, py = d['x'], d['y']
-            prev = self._pos.get(cid)
-            if prev:
-                dx, dy = px - prev[0], py - prev[1]
-                if math.hypot(dx, dy) > 0.3:   # only update heading if moving
-                    self._heading[cid] = math.atan2(dy, dx)
+            # Force heading to 0.0 so that the square does not rotate based on direction
+            self._heading[cid] = 0.0
             self._pos[cid] = (px, py, now)
             self._speeds[cid] = d.get('speed', 0.0)
             self._laps[cid] = d.get('lap', 0)
@@ -1149,7 +1149,7 @@ class CollisionEngine:
         if not pa or not pb: return None
         # Quick centre-to-centre pre-check (cheap reject before OBB test)
         dist = math.hypot(pa[0]-pb[0], pa[1]-pb[1])
-        if dist > CAR_LENGTH_CM + 10: return None   # definitely not touching
+        if dist > CAR_SIZE_CM + 10: return None   # definitely not touching
         key = frozenset([a, b])
         if now - self._car_cd.get(key, 0) < CAR_COLLISION_COOLDOWN: return None
         # Full OBB overlap test using actual car rectangles

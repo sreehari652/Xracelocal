@@ -1201,8 +1201,7 @@
     };
 
     const CHECKPOINTS_REQUIRED = 5;
-    const CAR_LENGTH_CM = 40;   // physical car length in cm (tag at centre)
-    const CAR_WIDTH_CM  = 6;    // physical car width in cm
+    const CAR_SIZE_CM   = 48;   // physical car square size in cm (tag at centre)
 
     const ANC = [
       { x: 0,   y: 0   },
@@ -1577,22 +1576,9 @@
         ctx.beginPath(); ctx.arc(p.px,p.py,15+4*Math.sin(now/120+tid),0,Math.PI*2); ctx.stroke(); ctx.globalAlpha=1;
         const dc = oob ? '#ff8800' : color;
 
-        // ── F1 car rectangle — 40cm long × 6cm wide ─────────────────────
-        // Compute heading from trail (last 2 smoothed points), otherwise use
-        // previous heading or 0. Store last heading per tag for continuity.
-        if (!tagData[tid]._heading) tagData[tid]._heading = 0;
-        if (d.trail.length >= 2) {
-          const tA = d.trail[d.trail.length-2], tB = d.trail[d.trail.length-1];
-          const dx = tB.x - tA.x, dy = tB.y - tA.y;
-          if (Math.hypot(dx,dy) > 0.5) {                  // only update if actually moving
-            // tp() flips y (py = height - y*scale), so heading in pixel space:
-            const pA = tp(tA.x, tA.y), pB = tp(tB.x, tB.y);
-            tagData[tid]._heading = Math.atan2(pB.py - pA.py, pB.px - pA.px);
-          }
-        }
-        const heading = tagData[tid]._heading;
-        const halfL = (CAR_LENGTH_CM * cScale) / 2;
-        const halfW = (CAR_WIDTH_CM  * cScale) / 2;
+        // ── F1 car square representation (no rotation to eliminate jitter) ──
+        const heading = 0; // always 0, no direction-based rotation
+        const halfSize = (CAR_SIZE_CM * cScale) / 2;
 
         ctx.save();
         ctx.translate(p.px, p.py);
@@ -1600,12 +1586,12 @@
         // Outer glow
         ctx.shadowColor = dc; ctx.shadowBlur = oob ? 24 : 14;
         ctx.fillStyle = dc; ctx.globalAlpha = oob ? 0.85 : 0.92;
-        ctx.beginPath(); ctx.roundRect(-halfL, -halfW, halfL*2, halfW*2, halfW*0.4); ctx.fill();
+        ctx.beginPath(); ctx.roundRect(-halfSize, -halfSize, halfSize*2, halfSize*2, halfSize*0.25); ctx.fill();
         ctx.shadowBlur = 0; ctx.globalAlpha = 1;
         // White border
         ctx.strokeStyle = '#fff'; ctx.lineWidth = oob ? 2.5 : 1.8;
         if (oob) ctx.setLineDash([3,3]);
-        ctx.beginPath(); ctx.roundRect(-halfL, -halfW, halfL*2, halfW*2, halfW*0.4); ctx.stroke();
+        ctx.beginPath(); ctx.roundRect(-halfSize, -halfSize, halfSize*2, halfSize*2, halfSize*0.25); ctx.stroke();
         ctx.setLineDash([]);
         // Position number centred on car
         ctx.fillStyle = '#000'; ctx.font = 'bold 11px Rajdhani,sans-serif';
@@ -1613,7 +1599,7 @@
         ctx.fillText(posNum, 0, 0);
         ctx.textBaseline = 'alphabetic';
         ctx.restore();
-        // ── end rectangle ─────────────────────────────────────────────────
+        // ── end square ───────────────────────────────────────────────────
 
         ctx.font='bold 13px Rajdhani,sans-serif'; ctx.textAlign='center';
         const lw=ctx.measureText(label).width+12;
@@ -1622,12 +1608,11 @@
 
         const wH=d.wallHits||0, cH=d.carHits||0;
         if ((wH>0||cH>0)&&Math.sin(now/150+tid)>0) {
-          const halfLh = (CAR_LENGTH_CM * cScale) / 2 + 5;
-          const halfWh = (CAR_WIDTH_CM  * cScale) / 2 + 5;
+          const halfSizeH = (CAR_SIZE_CM * cScale) / 2 + 5;
           ctx.save();
-          ctx.translate(p.px, p.py); ctx.rotate(heading);
+          ctx.translate(p.px, p.py); ctx.rotate(0);
           ctx.strokeStyle=wH>0?'#ff6b35':'#ff3b5c'; ctx.lineWidth=3; ctx.globalAlpha=0.65;
-          ctx.beginPath(); ctx.roundRect(-halfLh,-halfWh,halfLh*2,halfWh*2,halfWh*0.4); ctx.stroke();
+          ctx.beginPath(); ctx.roundRect(-halfSizeH,-halfSizeH,halfSizeH*2,halfSizeH*2,halfSizeH*0.25); ctx.stroke();
           ctx.restore(); ctx.globalAlpha=1;
         }
 
