@@ -1106,7 +1106,7 @@
 
     <div class="wall-group" id="finaleGroup" style="display:none;">
       <span class="wall-group-label">Final</span>
-      <button class="btn-wall" id="wbtn-finale" onclick="pushFinale()">:trophy: Finale</button>
+      <button class="btn-wall" id="wbtn-finale" onclick="pushFinale()">🏆 Finale</button>
     </div>
 
     <div class="wall-status" id="wallStatus">— not sent yet —</div>
@@ -2092,9 +2092,33 @@
       if (!currentGroupId) { players=[]; currentGroupStatus=''; setBadge(''); updateButtons(); renderPlayers(); return; }
       const opt=gSel.options[gSel.selectedIndex]; currentGroupStatus=opt.dataset.status||'';
       setBadge(currentGroupStatus); updateButtons();
+      updateFinaleButton();
       const {data}=await apiFetch(API.players+'?group_id='+currentGroupId);
       players=(data||[]).map(p=>({...p,tag_id:(p.tag_id!==null&&p.tag_id!==undefined&&p.tag_id!=='')?parseInt(p.tag_id,10):null}));
       refreshDebugBar(); renderPlayers();
+    }
+
+
+
+    function updateFinaleButton() {
+      const gSel = document.getElementById('gSel');
+      const finaleGroup = document.getElementById('finaleGroup');
+      if (!currentGroupId || !gSel.options[gSel.selectedIndex]) {
+        finaleGroup.style.display = 'none';
+        return;
+      }
+      const opt = gSel.options[gSel.selectedIndex];
+      const isFinal = opt.dataset.is_final === 'true';
+      finaleGroup.style.display = isFinal ? '' : 'none';
+    }
+
+    async function pushFinale() {
+      const gSel = document.getElementById('gSel');
+      const opt = gSel.options[gSel.selectedIndex];
+      const isFinal = opt?.dataset.is_final === 'true';
+      if (!isFinal) return;
+      const screenType = (currentGroupStatus === 'finished') ? 'finale_after' : 'finale_before';
+      await pushScreen(screenType);
     }
 
     // ═══════════════════════════════════════════════════════════
