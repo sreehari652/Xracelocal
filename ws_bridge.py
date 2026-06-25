@@ -160,8 +160,8 @@ CAR_COLLISION_DISTANCE_M   = 25.0   # fallback centre-to-centre pre-check
 CAR_COLLISION_COOLDOWN     = 1.0
 
 # Physical car dimensions in CENTIMETRES (F1-style RC car, tag at centre)
-CAR_LENGTH_CM = 40.0
-CAR_WIDTH_CM  =  6.0
+CAR_LENGTH_CM = 40.0   # square car — both sides equal
+CAR_WIDTH_CM  = 40.0   # square car — both sides equal
 SPEED_DIFF_THRESHOLD       = 10.0
 WALL_TOLERANCE_M           = 5.0
 WALL_COLLISION_COOLDOWN    = 0.5
@@ -913,8 +913,10 @@ class LapEngine:
         return None
 
     def _clear_active_lap(self):
-        """Remove this car's dots from all checkpoint active-lap entries."""
+        """Remove this car's dots from all checkpoint active-lap entries and touch history."""
         for cp_list in checkpoint_active_lap.values():
+            cp_list[:] = [t for t in cp_list if t['car_id'] != self.car_id]
+        for cp_list in checkpoint_touch_history.values():
             cp_list[:] = [t for t in cp_list if t['car_id'] != self.car_id]
 
     def _process_crossing(self, now):
@@ -934,7 +936,7 @@ class LapEngine:
             self._cp_touched_this_lap = set()
             self.current_lap_cp_hits = []
             self._clear_active_lap()
-            return None
+            return dict(type='lap_void', car_id=self.car_id, car_name=self.car_name, lap=self.current_lap, time=now)
 
         raw = now - self._lap_start
         ls  = self.scoring.close_lap(self.car_id, raw)
