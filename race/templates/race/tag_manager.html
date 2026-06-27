@@ -1097,6 +1097,7 @@
     <div class="wall-group">
       <span class="wall-group-label">Race</span>
       <button class="btn-wall" id="wbtn-leaderboard" onclick="pushScreen('leaderboard')">Leaderboard</button>
+      <span id="lapAutoPushBadge" style="font-family:'JetBrains Mono',monospace;font-size:.58rem;color:#00ff88;display:none;padding:2px 6px;background:rgba(0,255,136,.1);border:1px solid rgba(0,255,136,.25);border-radius:4px;white-space:nowrap;">⚡ auto</span>
       <button class="btn-wall" id="wbtn-players_detail" onclick="pushScreen('players_detail')">Player Details</button>
     </div>
     <div class="wall-group">
@@ -1267,6 +1268,7 @@
     // STATE
     // ═══════════════════════════════════════════════════════════
     let currentGroupId = null, currentGroupStatus = '', currentTotalLaps = 10, currentTrackCSV = '';
+    let currentTournamentId = null;  // resolved from tournament slug, sent with admin_start
     let raceConfig = { total_laps: 10, collision_absorbing_time: null, collision_creating_time: null, object_collision_time: null };
     let liveTrack = { center: [], inner: [], outer: [], checkpoints: [], start_finish: { x: 490, y1: 300, y2: 340, dir: 'left_to_right' } };
     let players = [], tagData = {}, reassignMode = false, liveLeaderboard = [], packetsThisSec = 0, totalPackets = 0;
@@ -1809,6 +1811,18 @@
               appendFeed(msg.game_events.map(ev => {
                 if (ev.type==='lap_done') {
                   setTimeout(renderLeaderboard,200);
+                  // ── Auto-push leaderboard to live wall after lap completes ──
+                  // Small delay to let record-lap API finish writing to DB first
+                  setTimeout(() => pushScreen('leaderboard'), 800);
+                  // ── Flash the auto-push badge ──
+                  const badge = document.getElementById('lapAutoPushBadge');
+                  if (badge) {
+                    const ts = new Date().toLocaleTimeString('en-GB',{hour12:false});
+                    badge.textContent = `⚡ auto · ${ts}`;
+                    badge.style.display = 'inline-block';
+                    updateWallStatus('leaderboard', true);
+                    setActiveWallBtn('leaderboard');
+                  }
                   const _p=players.find(p=>p.tag_id!==null && parseInt(p.tag_id,10)===ev.car_id);
                   if (_p&&_p.tag_id!==null) {
                     const _t=parseInt(_p.tag_id,10);
@@ -2123,11 +2137,12 @@
     async function loadGroups() {
       const slug=document.getElementById('tSel').value, gSel=document.getElementById('gSel');
       gSel.innerHTML='<option value="">— Group —</option>'; gSel.disabled=true;
-      currentGroupId=null; currentGroupStatus=''; currentTrackCSV=''; players=[]; reassignMode=false;
+      currentGroupId=null; currentGroupStatus=''; currentTrackCSV=''; currentTournamentId=null; players=[]; reassignMode=false;
       cpTouches={}; renderCpPanel();
       setBadge(''); updateButtons(); renderPlayers();
       dbg('d_track','none','warn'); dbg('d_wall','—s','warn'); dbg('d_atk','—s','warn'); dbg('d_vic','—s','warn');
       if (!slug) return;
+      currentTournamentId = await getTournamentId(slug);
       const {data}=await apiFetch(API.struct+'?slug='+slug); if (!data?.rounds) return;
       currentTotalLaps=data.total_laps||10;
       raceConfig={total_laps:data.total_laps||10,object_collision_time:data.object_collision_time??0,collision_creating_time:data.collision_creating_time??0,collision_absorbing_time:data.collision_absorbing_time??0};
@@ -2188,7 +2203,7 @@
       opt.dataset.status='live'; opt.textContent=opt.textContent.replace(/\s*\[.*?\]\s*$/,'')+' [live]';
       cpTouches={}; cpActiveLap={}; renderCpPanel(); resetAllEma();
       await pushScreen('counter');
-      sendWS({type:'admin_start',group_id:parseInt(currentGroupId),total_laps:currentTotalLaps,tag_map:buildTagMap(),race_config:raceConfig,track_csv:currentTrackCSV,checkpoints_required:CHECKPOINTS_REQUIRED});
+      sendWS({type:'admin_start',group_id:parseInt(currentGroupId),tournament_id:currentTournamentId,total_laps:currentTotalLaps,tag_map:buildTagMap(),race_config:raceConfig,track_csv:currentTrackCSV,checkpoints_required:CHECKPOINTS_REQUIRED});
       appendFeed([`▶ Group ${currentGroupId} LIVE – ${currentTotalLaps} laps, ${CHECKPOINTS_REQUIRED} CPs/lap`]);
       renderPlayers();
      
@@ -2293,7 +2308,7 @@
       sendWS({ type: 'reset' });
       cpTouches = {}; renderCpPanel(); resetAllEma();
       await pushScreen('counter');
-      sendWS({type:'admin_start',group_id:parseInt(currentGroupId),total_laps:currentTotalLaps,tag_map:buildTagMap(),race_config:raceConfig,track_csv:currentTrackCSV,checkpoints_required:CHECKPOINTS_REQUIRED});
+      sendWS({type:'admin_start',group_id:parseInt(currentGroupId),tournament_id:currentTournamentId,total_laps:currentTotalLaps,tag_map:buildTagMap(),race_config:raceConfig,track_csv:currentTrackCSV,checkpoints_required:CHECKPOINTS_REQUIRED});
       Object.keys(tagData).forEach(tid => { tagData[tid].trail = []; tagData[tid].lapInfo = null; tagData[tid].lapStartTime = null; });
       currentGroupStatus = 'live'; reassignMode = false; setBadge('live');
       appendFeed(['▶ Race restarted — tags reassigned, track reloaded, LIVE']);

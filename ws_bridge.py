@@ -89,8 +89,8 @@ KALMAN_DT_MAX     = 0.5     # clamp: if a tag went stale and comes back
 UDP_PORT = 4210
 WS_PORT  = 8001
 
-DJANGO_API_BASE = 'https://xraceapi.zyberspace.in'
-LAP_API_URL     = f'{DJANGO_API_BASE}/api/record-lap/'
+DJANGO_API_BASE    = 'https://xraceapi.zyberspace.in'
+LAP_API_URL        = f'{DJANGO_API_BASE}/api/record-lap/'
 
 # ── Anchor physical positions in CENTIMETRES ──────────────────────────────
 ANCHOR_POSITIONS = {
@@ -151,8 +151,9 @@ CHECKPOINTS = [
     (530.0, 165.0, 22.0), (555.0, 235.0, 22.0), (530.0, 295.0, 22.0),
 ]
 
-tag_to_gp:        dict       = {}
-current_group_id: int | None = None
+tag_to_gp:              dict       = {}
+current_group_id:       int | None = None
+current_tournament_id:  int | None = None   # set from admin_start payload
 
 CORNER_CUT_PENALTY         = 3.0
 CORNER_CUT_VOID_LAP        = False
@@ -585,8 +586,6 @@ def post_lap_to_api(tag_id: int, lap):
     threading.Thread(target=_go, daemon=True).start()
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# POSITIONING  (trilateration — all distances in cm)
 # ═══════════════════════════════════════════════════════════════════════
 
 class Positioning:
@@ -1463,7 +1462,8 @@ async def handle_client(ws):
                             tag_to_gp[int(k)] = int(v)
                             tag_to_gp[str(k)] = int(v)
                         print(f"[MAP] tag_to_gp = {tag_to_gp}")
-                    current_group_id = d.get('group_id')
+                    current_group_id      = d.get('group_id')
+                    current_tournament_id = d.get('tournament_id')
 
                     track_csv = d.get('track_csv', '')
                     if track_csv:
@@ -1498,7 +1498,7 @@ async def handle_client(ws):
 
                 elif mt == 'reset':
                     race_mgr.reset(); col_eng.reset(); race_armed = False
-                    tag_to_gp = {}; current_group_id = None
+                    tag_to_gp = {}; current_group_id = None; current_tournament_id = None
                     checkpoint_touch_history.clear(); checkpoint_active_lap.clear()
                     for t in tags.values(): t.reset()
                     reset_race_config()
