@@ -161,8 +161,8 @@ CAR_COLLISION_DISTANCE_M   = 25.0   # fallback centre-to-centre pre-check
 CAR_COLLISION_COOLDOWN     = 1.0
 
 # Physical car dimensions in CENTIMETRES (F1-style RC car, tag at centre)
-CAR_LENGTH_CM = 15.0   # circle dot representation for pinpoint testing
-CAR_WIDTH_CM  = 15.0   # circle dot representation for pinpoint testing
+CAR_LENGTH_CM = 40.0   # square car — both sides equal
+CAR_WIDTH_CM  = 40.0   # square car — both sides equal
 SPEED_DIFF_THRESHOLD       = 10.0
 WALL_TOLERANCE_M           = 5.0
 WALL_COLLISION_COOLDOWN    = 0.5
