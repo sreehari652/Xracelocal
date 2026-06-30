@@ -63,14 +63,14 @@ MEDIAN_WINDOW     = 15       # L2: rolling median window per anchor —
                              # since flicker reduction was prioritized.
 KALMAN_R          = 60.0    # L3: measurement noise covariance (cm²).
 KALMAN_Q          = 0.04    # L3: process noise covariance — heavy
-                             # smoothing mode. The previous Q=12 traded
-                             # too much smoothness for tracking speed:
+                             # smoothing mode. An earlier Q=12 traded too
+                             # much smoothness for tracking speed:
                              # frame-to-frame jumps averaged ~6cm (visible
                              # flicker) because the filter trusted raw,
-                             # noisy measurements almost directly. Q=0.15
-                             # with R=30 cuts frame-to-frame jumps to
-                             # ~1.4cm (well under the ~6-10cm raw noise
-                             # floor) at the cost of more lag while
+                             # noisy measurements almost directly.
+                             # Q=0.04 with R=60 (current) cuts frame-to-
+                             # frame jumps well under the ~6-10cm raw noise
+                             # floor at the cost of more lag while
                              # cornering — an explicit tradeoff since
                              # flicker was the priority and lag is
                              # acceptable for this use case.
@@ -1278,6 +1278,8 @@ def build_state(now):
                          history=sc['history']),
             wall_hits=len(col_eng.wall_hits(tid)),
             car_collisions=len(col_eng.car_events(tid)),
+            atk_collisions=sum(1 for e in col_eng.car_events(tid) if e['attacker'] == tid),
+            vic_collisions=sum(1 for e in col_eng.car_events(tid) if e['victim'] == tid),
             pkt_accepted=tag.pkt_accepted, pkt_rejected=tag.pkt_rejected))
     return json.dumps(dict(
         type="state_update", timestamp=now,
@@ -1391,6 +1393,8 @@ def udp_receiver():
                     timestamp=now, game_events=game_evts,
                     wall_hits=len(col_eng.wall_hits(tid)),
                     car_collisions=len(col_eng.car_events(tid)),
+                    atk_collisions=sum(1 for e in col_eng.car_events(tid) if e['attacker'] == tid),
+                    vic_collisions=sum(1 for e in col_eng.car_events(tid) if e['victim'] == tid),
                     current_penalty=round(open_lap._pen,2) if open_lap else 0.0,
                     current_bonus=round(open_lap._bon,2) if open_lap else 0.0,
                     lap_info=li,
