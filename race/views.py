@@ -185,3 +185,7 @@ def broadcast_screen(request):
     })
     response["Access-Control-Allow-Origin"] = "*"
     return response
+
+
+
+

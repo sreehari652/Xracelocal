@@ -899,6 +899,10 @@ class LapEngine:
         if currently_in and not self._in_sf_zone:
             # Rising edge: just entered the zone — this is the crossing.
             self._in_sf_zone = True
+            # ── Guard: car already completed all laps — ignore forever ────
+            if self.race_finished:
+                print(f"[SF] {self.car_name} crossed S/F but race already finished — ignored")
+                return None
             if now - self._last_cross < MIN_LAP_TIME:
                 print(f"[SF] {self.car_name} debounce — ignored (dist={dist:.1f}cm)")
                 return None

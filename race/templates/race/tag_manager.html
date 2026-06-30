@@ -1088,7 +1088,6 @@
       <button class="btn-wall" id="wbtn-landing" onclick="pushScreen('landing')">Landing</button>
       <button class="btn-wall" id="wbtn-players" onclick="pushScreen('players')">Players</button>
       <button class="btn-wall" id="wbtn-standing" onclick="pushScreen('standing')">Standing</button>
-      <button class="btn-wall" id="wbtn-ads" onclick="pushScreen('ads')">Ads</button>
     </div>
     <div class="wall-group">
       <span class="wall-group-label">Round</span>
@@ -1209,6 +1208,7 @@
       markLive:   BASE + '/api/mark-group-live/',
       markFinish: BASE + '/api/mark-group-finished/',
       resetGroup: BASE + '/api/reset-group/',
+      groupLaps:  BASE + '/api/group-laps/',
     };
 
     const CHECKPOINTS_REQUIRED = 5;
@@ -1272,6 +1272,7 @@
     // ═══════════════════════════════════════════════════════════
     let currentGroupId = null, currentGroupStatus = '', currentTotalLaps = 10, currentTrackCSV = '';
     let currentTournamentId = null;  // resolved from tournament slug, sent with admin_start
+    let finishBanners = [];  // [{name, color, ts}] finish overlay
     let raceConfig = { total_laps: 10, collision_absorbing_time: null, collision_creating_time: null, object_collision_time: null };
     let liveTrack = { center: [], inner: [], outer: [], checkpoints: [], start_finish: { x: 490, y1: 300, y2: 340, dir: 'left_to_right' } };
     let players = [], tagData = {}, reassignMode = false, liveLeaderboard = [], packetsThisSec = 0, totalPackets = 0;
@@ -1569,7 +1570,14 @@
         // ── Apply snap-EMA for canvas render ───────────────────────────
         // d.x / d.y = server-filtered values (used for game logic)
         // smoothed.x / smoothed.y = what we actually draw
-        const smoothed = emaSmooth(tid, d.x, d.y, dt);
+        // Speed=0: freeze EMA target so jitter stops completely
+        let smoothed;
+        if ((d.speed ?? 1) === 0) {
+          const s = emaState[tid];
+          smoothed = s ? s : emaSmooth(tid, d.x, d.y, dt);
+        } else {
+          smoothed = emaSmooth(tid, d.x, d.y, dt);
+        }
         const p = tp(smoothed.x, smoothed.y);
 
         const xs=ANC.map(a=>a.x), ys=ANC.map(a=>a.y);
@@ -1591,30 +1599,27 @@
         ctx.beginPath(); ctx.arc(p.px,p.py,15+4*Math.sin(now/120+tid),0,Math.PI*2); ctx.stroke(); ctx.globalAlpha=1;
         const dc = oob ? '#ff8800' : color;
 
-        // ── F1 car square representation (no rotation to eliminate jitter) ──
-        const heading = 0; // always 0, no direction-based rotation
-        const halfSize = (CAR_SIZE_CM * cScale) / 2;
-
+        // ── Circle car marker ────────────────────────────────────────────
+        const radius = (CAR_SIZE_CM * cScale) / 2;
         ctx.save();
         ctx.translate(p.px, p.py);
-        ctx.rotate(heading);
         // Outer glow
         ctx.shadowColor = dc; ctx.shadowBlur = oob ? 24 : 14;
         ctx.fillStyle = dc; ctx.globalAlpha = oob ? 0.85 : 0.92;
-        ctx.beginPath(); ctx.roundRect(-halfSize, -halfSize, halfSize*2, halfSize*2, halfSize*0.25); ctx.fill();
+        ctx.beginPath(); ctx.arc(0, 0, radius, 0, Math.PI*2); ctx.fill();
         ctx.shadowBlur = 0; ctx.globalAlpha = 1;
         // White border
         ctx.strokeStyle = '#fff'; ctx.lineWidth = oob ? 2.5 : 1.8;
         if (oob) ctx.setLineDash([3,3]);
-        ctx.beginPath(); ctx.roundRect(-halfSize, -halfSize, halfSize*2, halfSize*2, halfSize*0.25); ctx.stroke();
+        ctx.beginPath(); ctx.arc(0, 0, radius, 0, Math.PI*2); ctx.stroke();
         ctx.setLineDash([]);
-        // Position number centred on car
+        // Position number centred
         ctx.fillStyle = '#000'; ctx.font = 'bold 11px Rajdhani,sans-serif';
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText(posNum, 0, 0);
         ctx.textBaseline = 'alphabetic';
         ctx.restore();
-        // ── end square ───────────────────────────────────────────────────
+        // ── end circle ───────────────────────────────────────────────────
 
         ctx.font='bold 13px Rajdhani,sans-serif'; ctx.textAlign='center';
         const lw=ctx.measureText(label).width+12;
@@ -1625,9 +1630,9 @@
         if ((wH>0||cH>0)&&Math.sin(now/150+tid)>0) {
           const halfSizeH = (CAR_SIZE_CM * cScale) / 2 + 5;
           ctx.save();
-          ctx.translate(p.px, p.py); ctx.rotate(0);
-          ctx.strokeStyle=wH>0?'#ff6b35':'#ff3b5c'; ctx.lineWidth=3; ctx.globalAlpha=0.65;
-          ctx.beginPath(); ctx.roundRect(-halfSizeH,-halfSizeH,halfSizeH*2,halfSizeH*2,halfSizeH*0.25); ctx.stroke();
+          ctx.translate(p.px, p.py);
+          ctx.strokeStyle=wH>0?'#ff6b35':'#ff3b5c'; ctx.lineWidth=2; ctx.globalAlpha=0.65;
+          ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI*2); ctx.stroke();
           ctx.restore(); ctx.globalAlpha=1;
         }
 
@@ -1694,6 +1699,65 @@
         });
         ctx.textAlign='left';
       }
+
+      // ── Finish banners ──────────────────────────────────────────────
+      const BANNER_MS = 4000;
+      finishBanners = finishBanners.filter(b => now - b.ts < BANNER_MS);
+      finishBanners.forEach((b, bi) => {
+        const age     = now - b.ts;
+        const prog    = age / BANNER_MS;
+        const fadeIn  = Math.min(age / 300, 1);
+        const fadeOut = prog > 0.75 ? 1 - (prog - 0.75) / 0.25 : 1;
+        const alpha   = fadeIn * fadeOut;
+        const sc      = 0.85 + 0.15 * Math.min(age / 400, 1);
+        const cx      = canvas.width  / 2;
+        const cy      = canvas.height / 2 + bi * 115;
+
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.translate(cx, cy);
+        ctx.scale(sc, sc);
+
+        // Dark backdrop
+        ctx.shadowColor = 'rgba(0,0,0,0.95)'; ctx.shadowBlur = 50;
+        ctx.fillStyle   = 'rgba(4,10,4,0.90)';
+        ctx.beginPath(); ctx.roundRect(-230, -55, 460, 110, 18); ctx.fill();
+        ctx.shadowBlur  = 0;
+
+        // Colored side bar
+        ctx.fillStyle = b.color;
+        ctx.beginPath(); ctx.roundRect(-230, -55, 8, 110, [18, 0, 0, 18]); ctx.fill();
+
+        // Gold border
+        ctx.strokeStyle = '#ffd700'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.roundRect(-230, -55, 460, 110, 18); ctx.stroke();
+
+        // Trophy text
+        ctx.font = '36px serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('\u{1F3C6}', -168, 0);
+
+        // FINISHED label
+        ctx.fillStyle = '#ffd700';
+        ctx.font = 'bold 10px JetBrains Mono, monospace';
+        ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+        ctx.fillText('FINISHED ALL LAPS', -128, -22);
+
+        // Player name
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 28px Rajdhani, sans-serif';
+        ctx.fillText(b.name, -128, 10);
+
+        // Progress drain bar
+        const bW = 390, bH = 5, bX = -195, bY = 42;
+        ctx.fillStyle = 'rgba(255,215,0,0.18)';
+        ctx.beginPath(); ctx.roundRect(bX, bY, bW, bH, 3); ctx.fill();
+        ctx.fillStyle = '#ffd700';
+        ctx.beginPath(); ctx.roundRect(bX, bY, bW * (1 - prog), bH, 3); ctx.fill();
+
+        ctx.restore();
+      });
+
       requestAnimationFrame(draw);
     }
     draw();
@@ -1897,7 +1961,11 @@
                 }
                 if (ev.type==='race_finish') {
                   const _p=players.find(p=>p.tag_id!==null && parseInt(p.tag_id,10)===ev.car_id);
-                  return `FINISH  ${_p ? _p.player_name : ev.car_name}`;
+                  const _fname = _p ? _p.player_name : ev.car_name;
+                  const _fpIdx = _p ? players.indexOf(_p) : 0;
+                  const _fcolor = COLORS[_fpIdx % COLORS.length];
+                  finishBanners.push({ name: _fname, color: _fcolor, ts: Date.now() });
+                  return `FINISH  ${_fname}`;
                 }
                 if (ev.type==='wall') {
                   const _p=players.find(p=>p.tag_id!==null && parseInt(p.tag_id,10)===ev.car_id);
@@ -2165,8 +2233,58 @@
       const opt=gSel.options[gSel.selectedIndex]; currentGroupStatus=opt.dataset.status||'';
       setBadge(currentGroupStatus); updateButtons();
       updateFinaleButton();
+
+      // Load players
       const {data}=await apiFetch(API.players+'?group_id='+currentGroupId);
       players=(data||[]).map(p=>({...p,tag_id:(p.tag_id!==null&&p.tag_id!==undefined&&p.tag_id!=='')?parseInt(p.tag_id,10):null}));
+
+      // ── Restore lap state from DB on reload ──────────────────────────────
+      // Fetch existing laps for this group so players who already completed
+      // all their laps show as FINISHED without needing to re-run the race.
+      try {
+        const {data: lapData} = await apiFetch(API.groupLaps + '?group_id=' + currentGroupId);
+        if (lapData && lapData.length) {
+          lapData.forEach(entry => {
+            const tid = entry.tag_id;
+            if (tid == null) return;
+            const tidInt = parseInt(tid, 10);
+            if (isNaN(tidInt)) return;
+
+            // Ensure tagData entry exists
+            if (!tagData[tidInt]) {
+              tagData[tidInt] = {x:0, y:0, trail:[], lastTime:0, speed:0,
+                                 lapInfo:null, lapStartTime:null, wallHits:0, carHits:0};
+            }
+
+            const lapsDone   = entry.laps_done || 0;
+            const totalLaps  = currentTotalLaps || entry.total_laps || 2;
+            const finished   = lapsDone >= totalLaps;
+            const bestElp    = entry.best_elp_sec ?? Infinity;
+
+            // Restore lapInfo
+            tagData[tidInt].lapInfo = {
+              is_racing:        false,
+              race_finished:    finished,
+              current_lap:      lapsDone,
+              total_laps:       totalLaps,
+              laps_done:        lapsDone,
+              checkpoints_hit:  0,
+              checkpoints_total: CHECKPOINTS_REQUIRED,
+              _cpSet:           new Set(),
+            };
+
+            // Restore liveLeaderboard entry
+            let lb = liveLeaderboard.find(r => r.car_id === tidInt);
+            if (!lb) {
+              lb = { car_id: tidInt, best_elp: Infinity, best_raw: Infinity, laps_done: 0 };
+              liveLeaderboard.push(lb);
+            }
+            lb.laps_done = lapsDone;
+            if (bestElp < lb.best_elp) lb.best_elp = bestElp;
+          });
+        }
+      } catch(e) { console.warn('[selectGroup] lap restore failed:', e); }
+
       refreshDebugBar(); renderPlayers();
     }
 
