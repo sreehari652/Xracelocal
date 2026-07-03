@@ -553,17 +553,18 @@ def post_lap_to_api(tag_id: int, lap):
         return
 
     body = json.dumps({
-        "gp_id":       gp,
-        "lap_number":  lap.lap_number,
-        "raw_time":    round(lap.raw_time, 3),
-        "elp_time":    round(lap.elp, 3),
-        "penalty":     round(lap._pen, 3),
-        "bonus":       round(lap._bon, 3),
-        "wall_hits":   lap.wall_hits,
-        "atk_hits":    lap.atk_hits,
-        "vic_hits":    lap.vic_hits,
-        "corner_cuts": lap.corner_cuts,
-        "voided":      lap.voided,
+        "gp_id":          gp,
+        "lap_number":     lap.lap_number,
+        "raw_time":       round(lap.raw_time, 3),
+        "elp_time":       round(lap.elp, 3),
+        "penalty":        round(lap._pen, 3),
+        "bonus":          round(lap._bon, 3),
+        "wall_hits":      lap.wall_hits,
+        "atk_hits":       lap.atk_hits,
+        "vic_hits":       lap.vic_hits,
+        "corner_cuts":    lap.corner_cuts,
+        "voided":         lap.voided,
+        "top_speed_kmh":  round(lap.top_speed_kmh, 2),
     }).encode()
 
     def _go():
@@ -713,6 +714,7 @@ class LapScore:
         self.raw_time = 0.0; self.closed_at = None
         self.wall_hits = self.atk_hits = self.vic_hits = self.corner_cuts = 0
         self.overspeed = self.voided = False; self._pen = self._bon = 0.0
+        self.top_speed_kmh = 0.0   # max speed recorded during this lap (km/h)
 
     def add_wall_hit(self):
         self._pen += WALL_HIT_PENALTY; self.wall_hits += 1
@@ -753,9 +755,10 @@ class ScoringEngine:
     def register(self, cid, name): self._names[cid] = name
     def open_lap(self, cid, n): self._open[cid] = LapScore(cid, self._names.get(cid, f"Car{cid}"), n)
 
-    def close_lap(self, cid, raw):
+    def close_lap(self, cid, raw, top_speed_kmh=0.0):
         lap = self._open.pop(cid, None) or LapScore(cid, self._names.get(cid, f"Car{cid}"), 0)
         lap.raw_time = raw; lap.closed_at = time.time()
+        lap.top_speed_kmh = round(top_speed_kmh, 2)
         self._history[cid].append(lap)
         msg = f"📊 LAP | {lap.car_name} Lap {lap.lap_number} raw={raw:.2f}s ELP={lap.elp:.2f}s"
         if PRINT_LAP_EVENTS: print(msg)
@@ -942,7 +945,13 @@ class LapEngine:
             return dict(type='lap_void', car_id=self.car_id, car_name=self.car_name, lap=self.current_lap, time=now)
 
         raw = now - self._lap_start
-        ls  = self.scoring.close_lap(self.car_id, raw)
+        # Pull the tag's per-lap max speed (cm/s → km/h) then reset it so
+        # the next lap starts accumulating from zero.
+        tag_state = tags.get(self.car_id)
+        top_kmh = (tag_state.max_speed_ms * 0.036) if tag_state else 0.0
+        if tag_state:
+            tag_state.max_speed_ms = 0.0
+        ls  = self.scoring.close_lap(self.car_id, raw, top_speed_kmh=top_kmh)
         self._lap_times.append(raw); self.laps_done += 1
         self._cp_touched_this_lap = set()
         self.current_lap_cp_hits = []
