@@ -87,18 +87,84 @@ KALMAN_DT_MAX     = 0.5     # clamp: if a tag went stale and comes back
 # NETWORK CONFIGURATION  ← edit here
 # ═══════════════════════════════════════════════════════════════════════
 UDP_PORT     = 4210
-IMU_UDP_PORT = 4211   # IMU data from tag (heading, gyro, accel)
+IMU_UDP_PORT = 4211   # IMU data from tag on RC car
 WS_PORT      = 8001
 
-# IMU integration constants
-GYRO_DEADBAND        = 0.02   # rad/s  — ignore below this (stops heading drift at rest)
-STATIC_GYRO_THR      = 0.05   # rad/s  — car considered stationary below this
-STATIC_ACCEL_THR     = 1.5    # m/s²   — horizontal accel threshold
-STATIC_KALMAN_R_MULT = 3.0    # multiply Kalman R when stationary (kills jitter)
+# ── IMU / ZUPT constants ──────────────────────────────────────────────
+# ZUPT = Zero Velocity Update: freeze position completely when stationary.
+# Position only resumes when motion is confirmed — eliminates all jitter.
+IMU_GYRO_DEADBAND       = 0.02   # rad/s  — gyro noise floor, ignored
+STATIC_GYRO_THR         = 0.08   # rad/s  — above this = definitely rotating
+STATIC_ACCEL_DELTA_THR  = 0.8    # m/s²   — change in accel magnitude = moving
+STATIC_FRAMES_TO_FREEZE = 8      # consecutive static IMU frames before freeze
+MOTION_FRAMES_TO_UNFREEZE = 3    # consecutive motion frames before unfreeze
+# When frozen, Kalman state velocity is zeroed so no velocity artifact on restart
 
 # IMU data per tag — written by imu_listener thread, read by udp_receiver
 # {tag_id: {heading, gz, ax, ay, az, gx, gy, ts}}
 imu_store: dict = {}
+
+
+class MotionGate:
+    """
+    Per-tag ZUPT gate with hysteresis.
+    Needs STATIC_FRAMES_TO_FREEZE consecutive static readings to freeze.
+    Needs only MOTION_FRAMES_TO_UNFREEZE consecutive motion readings to unfreeze.
+    This prevents flickering on the static/moving boundary.
+    """
+    def __init__(self):
+        self.frozen        = False
+        self.frozen_x      = 0.0
+        self.frozen_y      = 0.0
+        self._static_count = 0
+        self._motion_count = 0
+        self._prev_accel   = None   # previous accel magnitude for delta check
+
+    def update(self, imu: dict | None, kalman_speed_cms: float) -> bool:
+        """
+        Returns True if car is considered stationary (position should be frozen).
+        Uses IMU as primary detector; Kalman speed as fallback.
+        """
+        if imu is None:
+            # No IMU — fall back to Kalman speed only
+            moving = kalman_speed_cms > 5.0  # >5 cm/s = moving
+        else:
+            gz         = abs(imu.get('gz', 0.0))
+            ax         = imu.get('ax', 0.0)
+            ay         = imu.get('ay', 0.0)
+            az         = imu.get('az', 0.0)
+            accel_mag  = math.sqrt(ax**2 + ay**2 + az**2)
+            accel_delta = abs(accel_mag - self._prev_accel) if self._prev_accel is not None else 0.0
+            self._prev_accel = accel_mag
+
+            # Rotating OR accel changing = moving
+            rotating       = gz > STATIC_GYRO_THR
+            accel_changing = accel_delta > STATIC_ACCEL_DELTA_THR
+            moving = rotating or accel_changing
+
+        if moving:
+            self._motion_count += 1
+            self._static_count  = 0
+            if self._motion_count >= MOTION_FRAMES_TO_UNFREEZE:
+                self.frozen = False
+        else:
+            self._static_count += 1
+            self._motion_count  = 0
+            if self._static_count >= STATIC_FRAMES_TO_FREEZE:
+                self.frozen = True
+
+        return self.frozen
+
+    def freeze(self, x: float, y: float):
+        """Store freeze position and zero Kalman velocity (called externally)."""
+        self.frozen_x = x
+        self.frozen_y = y
+
+    def reset(self):
+        self.frozen        = False
+        self.frozen_x      = self.frozen_y = 0.0
+        self._static_count = self._motion_count = 0
+        self._prev_accel   = None
 
 DJANGO_API_BASE    = 'https://xraceapi.zyberspace.in'
 LAP_API_URL        = f'{DJANGO_API_BASE}/api/record-lap/'
@@ -484,7 +550,6 @@ def apply_track_data(td: TrackData):
     global SF_GATE_CX, SF_GATE_CY
 
     if td.checkpoints:
-
         CHECKPOINTS = list(td.checkpoints)
         print(f"[TRACK] {len(CHECKPOINTS)} checkpoints loaded from CSV")
     else:
@@ -682,6 +747,10 @@ class TagState:
         # ── THREE-LAYER FILTER (one per tag) ─────────────────────────
         self._filter = UWBFilter(tid, ANCHOR_COUNT)
 
+        # ── ZUPT motion gate ──────────────────────────────────────────
+        self._gate   = MotionGate()
+        self.heading = 0.0   # degrees, from IMU
+
     def update_position(self, rx, ry, quality, anc, now):
         if self._prev_t is not None:
             dt = now - self._prev_t
@@ -713,6 +782,8 @@ class TagState:
         self.update_count = self.pkt_total = self.pkt_accepted = self.pkt_rejected = 0
         self.last_ranges = [0.0]*ANCHOR_COUNT
         self._filter.reset()   # ← reset all three filter layers
+        self._gate.reset()
+        self.heading = 0.0
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1134,7 +1205,7 @@ class CollisionEngine:
             px, py = d['x'], d['y']
             # Use IMU heading if available (more accurate than position delta)
             imu = imu_store.get(cid)
-            if imu and abs(imu.get('gz', 0)) > GYRO_DEADBAND:
+            if imu and abs(imu.get('gz', 0)) > IMU_GYRO_DEADBAND:
                 self._heading[cid] = math.radians(imu['heading'])
             else:
                 prev = self._pos.get(cid)
@@ -1338,10 +1409,10 @@ def _serialize_cp_active() -> dict:
 
 def imu_listener():
     """
-    Receives IMU packets from the tag on UDP port 4211.
-    Packet format: T0,IMU,293.54,0.0903,16.856,7.353,7.377,0.0314,-0.0887,105585
-    Fields:        T{id},IMU,heading,gz,ax,ay,az,gx,gy,timestamp_ms
-    Writes parsed data into imu_store[tag_id] — thread-safe for dict assignment.
+    Receives IMU UDP packets from the tag on port 4211.
+    Format: T0,IMU,293.54,0.0903,16.856,7.353,7.377,0.0314,-0.0887,105585
+    Fields: T{id},IMU,heading_deg,gz,ax,ay,az,gx,gy,timestamp_ms
+    Writes to imu_store[tag_id] — dict assignment is GIL-safe in CPython.
     """
     global running
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -1352,11 +1423,11 @@ def imu_listener():
     while running:
         try:
             data, _ = sock.recvfrom(512)
-            line = data.decode('utf-8', errors='ignore').strip()
-            parts = line.split(',')
+            line    = data.decode('utf-8', errors='ignore').strip()
+            parts   = line.split(',')
             if len(parts) < 10 or parts[1] != 'IMU':
                 continue
-            tid = int(parts[0][1:])  # 'T0' → 0
+            tid = int(parts[0][1:])   # 'T0' → 0
             imu_store[tid] = {
                 'heading': float(parts[2]),
                 'gz':      float(parts[3]),
@@ -1367,25 +1438,16 @@ def imu_listener():
                 'gy':      float(parts[8]),
                 'ts':      int(parts[9]),
             }
+            # Update tag heading immediately (doesn't wait for UWB packet)
+            if tid in tags:
+                tags[tid].heading = float(parts[2])
         except socket.timeout:
             continue
         except Exception as e:
             if running:
-                print(f"[IMU] Parse error: {e}")
+                print(f"[IMU] Error: {e}")
     sock.close()
     print("[IMU] Stopped")
-
-
-def imu_is_static(tid: int) -> bool:
-    """Return True if the car appears stationary based on IMU data."""
-    d = imu_store.get(tid)
-    if not d:
-        return False  # no IMU data — assume moving (conservative)
-    gz    = abs(d.get('gz', 0))
-    ax    = d.get('ax', 0)
-    ay    = d.get('ay', 0)
-    accel = math.sqrt(ax**2 + ay**2)
-    return gz < STATIC_GYRO_THR and accel < STATIC_ACCEL_THR
 
 
 def udp_receiver():
@@ -1428,21 +1490,33 @@ def udp_receiver():
             if pos is None:
                 tag.pkt_rejected += 1; stats['udp_invalid'] += 1
                 continue
-            # ── LAYER 3: Kalman on (x, y) — with IMU static gating ───
-            # When IMU reports car is stationary, raise R so the Kalman
-            # filter trusts UWB measurements less → kills position jitter.
-            if imu_is_static(tid):
-                orig_R = tag._filter._kf.R.copy()
-                tag._filter._kf.R = orig_R * STATIC_KALMAN_R_MULT
-                rx, ry = tag._filter.filter_position(pos[0], pos[1], now)
-                tag._filter._kf.R = orig_R
-            else:
-                rx, ry = tag._filter.filter_position(pos[0], pos[1], now)
-            
+            # ── LAYER 3: Kalman on (x, y) ─────────────────────────────
+            rx, ry = tag._filter.filter_position(pos[0], pos[1], now)
+
             # ── CLAMP POSITION TO ANCHOR BOUNDING BOX ─────────────────
-            # Prevents negative/outside jumps caused by UWB multipath/NLOS errors
             rx = max(0.0, min(rx, 655.0))
             ry = max(0.0, min(ry, 920.0))
+
+            # ── LAYER 4: ZUPT — freeze when stationary ─────────────────
+            # Kalman speed in cm/s for fallback detection
+            kalman_speed = tag.speed_ms   # last known speed
+            imu          = imu_store.get(tid)
+            is_frozen    = tag._gate.update(imu, kalman_speed)
+
+            if is_frozen:
+                # Store freeze position on first freeze frame
+                if not tag._gate.frozen_x and not tag._gate.frozen_y:
+                    tag._gate.freeze(rx, ry)
+                # Zero Kalman velocity so no burst on restart
+                tag._filter._kf.x[2, 0] = 0.0
+                tag._filter._kf.x[3, 0] = 0.0
+                rx, ry = tag._gate.frozen_x, tag._gate.frozen_y
+                is_static = True
+            else:
+                # Update freeze anchor to current position while moving
+                # (ready for next freeze event)
+                tag._gate.freeze(rx, ry)
+                is_static = False
 
             tag.update_position(rx, ry, quality, anc_count, now)
             # Store filtered ranges for display (raw would be misleading)
@@ -1457,14 +1531,15 @@ def udp_receiver():
             if connected_clients and event_loop:
                 li = race_mgr.get_info(tid, now)
                 open_lap = scoring._open.get(tid)
-                imu = imu_store.get(tid, {})
+                imu = imu_store.get(tid)
                 msg = json.dumps(dict(
                     type="tag_position", tag_id=tid,
                     x=round(rx, 4), y=round(ry, 4),
-                    heading=round(imu.get('heading', 0.0), 2),
+                    heading=round(tag.heading, 2),
+                    is_static=is_static,
                     range=tag.last_ranges,
-                    speed=round(tag.speed_display(), 2),
-                    speed_ms=round(tag.speed_ms, 3),
+                    speed=round(0.0 if is_static else tag.speed_display(), 2),
+                    speed_ms=round(0.0 if is_static else tag.speed_ms, 3),
                     speed_unit=SPEED_DISPLAY_UNIT,
                     quality=quality, anchor_count=anc_count,
                     timestamp=now, game_events=game_evts,
@@ -1478,7 +1553,7 @@ def udp_receiver():
                         ax=round(imu.get('ax', 0.0), 3),
                         ay=round(imu.get('ay', 0.0), 3),
                         heading=round(imu.get('heading', 0.0), 2),
-                        static=imu_is_static(tid),
+                        static=is_static,
                     ) if imu else None,
                     checkpoint_touches=_serialize_cp_touches(), cp_active_lap=_serialize_cp_active()))
                 asyncio.run_coroutine_threadsafe(broadcast(msg), event_loop)
@@ -1680,8 +1755,8 @@ async def main():
     print(f"    L3 Kalman (x,y)     : R={KALMAN_R}  Q={KALMAN_Q}  dt={KALMAN_DT}s")
     print(f"{'═'*60}\n")
 
-    threading.Thread(target=udp_receiver,  daemon=True, name="UDP").start()
-    threading.Thread(target=imu_listener,  daemon=True, name="IMU").start()
+    threading.Thread(target=udp_receiver, daemon=True, name="UDP").start()
+    threading.Thread(target=imu_listener, daemon=True, name="IMU").start()
     asyncio.create_task(stats_reporter())
     try:
         async with websockets.serve(handle_client, "0.0.0.0", WS_PORT):

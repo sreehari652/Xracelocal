@@ -1249,6 +1249,16 @@
         s.x = rawX; s.y = rawY;
         return s;
       }
+
+      // ── ZUPT: if server says car is stationary, hold EMA frozen ──
+      // No smoothing drift — position is pixel-perfect locked until motion resumes.
+      const d = tagData[tid];
+      if (d && d.isStatic) {
+        // Snap EMA to the frozen server position (eliminates residual drift)
+        s.x = rawX; s.y = rawY;
+        return s;
+      }
+
       // Frame-rate independent exponential decay:
       // current = current + (target - current) * (1 - e^(-k * dt))
       const t = 1 - Math.exp(-EMA_K * dt);
@@ -1588,9 +1598,9 @@
         ctx.beginPath(); ctx.arc(p.px,p.py,15+4*Math.sin(now/120+tid),0,Math.PI*2); ctx.stroke(); ctx.globalAlpha=1;
         const dc = oob ? '#ff8800' : color;
 
-        // ── F1 car square representation — heading from IMU gyro ──
-        const headingDeg = (d.heading != null) ? d.heading : 0;
-        const heading = headingDeg * Math.PI / 180;
+        // ── Heading from IMU gyro (frozen when static, live when moving) ──
+        const headingDeg = (d && d.heading != null) ? d.heading : 0;
+        const heading    = headingDeg * Math.PI / 180;
         const halfSize = (CAR_SIZE_CM * cScale) / 2;
 
         ctx.save();
@@ -1786,12 +1796,14 @@
           if (msg.type==='tag_position') {
             const tid=parseInt(msg.tag_id,10); if (isNaN(tid)) return;
             rawMonitorIngest(tid, msg);
-            if (!tagData[tid]) tagData[tid]={x:0,y:0,heading:0,trail:[],lastTime:0,speed:0,lapInfo:null,lapStartTime:null,wallHits:0,carHits:0};
+            if (!tagData[tid]) tagData[tid]={x:0,y:0,heading:0,isStatic:false,trail:[],lastTime:0,speed:0,lapInfo:null,lapStartTime:null,wallHits:0,carHits:0};
 
-            // Store server-filtered position (used for game logic & EMA input)
-            tagData[tid].x=msg.x; tagData[tid].y=msg.y;
-            tagData[tid].speed=msg.speed??tagData[tid].speed;
-            if (msg.heading!=null) tagData[tid].heading=msg.heading;
+            // Store server-filtered position
+            tagData[tid].x     = msg.x;
+            tagData[tid].y     = msg.y;
+            tagData[tid].speed = msg.is_static ? 0 : (msg.speed ?? tagData[tid].speed);
+            if (msg.heading   != null) tagData[tid].heading  = msg.heading;
+            if (msg.is_static != null) tagData[tid].isStatic = msg.is_static;
             tagData[tid].lastTime=Date.now();
             if (msg.wall_hits!=null)     { tagData[tid].wallHits=msg.wall_hits;    refreshCollisionStats(); }
             if (msg.car_collisions!=null) { tagData[tid].carHits=msg.car_collisions; refreshCollisionStats(); }
