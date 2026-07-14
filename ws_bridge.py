@@ -63,14 +63,14 @@ MEDIAN_WINDOW     = 15       # L2: rolling median window per anchor —
                              # since flicker reduction was prioritized.
 KALMAN_R          = 60.0    # L3: measurement noise covariance (cm²).
 KALMAN_Q          = 0.04    # L3: process noise covariance — heavy
-                             # smoothing mode. An earlier Q=12 traded too
-                             # much smoothness for tracking speed:
+                             # smoothing mode. The previous Q=12 traded
+                             # too much smoothness for tracking speed:
                              # frame-to-frame jumps averaged ~6cm (visible
                              # flicker) because the filter trusted raw,
-                             # noisy measurements almost directly.
-                             # Q=0.04 with R=60 (current) cuts frame-to-
-                             # frame jumps well under the ~6-10cm raw noise
-                             # floor at the cost of more lag while
+                             # noisy measurements almost directly. Q=0.15
+                             # with R=30 cuts frame-to-frame jumps to
+                             # ~1.4cm (well under the ~6-10cm raw noise
+                             # floor) at the cost of more lag while
                              # cornering — an explicit tradeoff since
                              # flicker was the priority and lag is
                              # acceptable for this use case.
@@ -86,8 +86,19 @@ KALMAN_DT_MAX     = 0.5     # clamp: if a tag went stale and comes back
 # ═══════════════════════════════════════════════════════════════════════
 # NETWORK CONFIGURATION  ← edit here
 # ═══════════════════════════════════════════════════════════════════════
-UDP_PORT = 4210
-WS_PORT  = 8001
+UDP_PORT     = 4210
+IMU_UDP_PORT = 4211   # IMU data from tag (heading, gyro, accel)
+WS_PORT      = 8001
+
+# IMU integration constants
+GYRO_DEADBAND        = 0.02   # rad/s  — ignore below this (stops heading drift at rest)
+STATIC_GYRO_THR      = 0.05   # rad/s  — car considered stationary below this
+STATIC_ACCEL_THR     = 1.5    # m/s²   — horizontal accel threshold
+STATIC_KALMAN_R_MULT = 3.0    # multiply Kalman R when stationary (kills jitter)
+
+# IMU data per tag — written by imu_listener thread, read by udp_receiver
+# {tag_id: {heading, gz, ax, ay, az, gx, gy, ts}}
+imu_store: dict = {}
 
 DJANGO_API_BASE    = 'https://xraceapi.zyberspace.in'
 LAP_API_URL        = f'{DJANGO_API_BASE}/api/record-lap/'
@@ -473,6 +484,7 @@ def apply_track_data(td: TrackData):
     global SF_GATE_CX, SF_GATE_CY
 
     if td.checkpoints:
+
         CHECKPOINTS = list(td.checkpoints)
         print(f"[TRACK] {len(CHECKPOINTS)} checkpoints loaded from CSV")
     else:
@@ -553,18 +565,17 @@ def post_lap_to_api(tag_id: int, lap):
         return
 
     body = json.dumps({
-        "gp_id":          gp,
-        "lap_number":     lap.lap_number,
-        "raw_time":       round(lap.raw_time, 3),
-        "elp_time":       round(lap.elp, 3),
-        "penalty":        round(lap._pen, 3),
-        "bonus":          round(lap._bon, 3),
-        "wall_hits":      lap.wall_hits,
-        "atk_hits":       lap.atk_hits,
-        "vic_hits":       lap.vic_hits,
-        "corner_cuts":    lap.corner_cuts,
-        "voided":         lap.voided,
-        "top_speed_kmh":  round(lap.top_speed_kmh, 2),
+        "gp_id":       gp,
+        "lap_number":  lap.lap_number,
+        "raw_time":    round(lap.raw_time, 3),
+        "elp_time":    round(lap.elp, 3),
+        "penalty":     round(lap._pen, 3),
+        "bonus":       round(lap._bon, 3),
+        "wall_hits":   lap.wall_hits,
+        "atk_hits":    lap.atk_hits,
+        "vic_hits":    lap.vic_hits,
+        "corner_cuts": lap.corner_cuts,
+        "voided":      lap.voided,
     }).encode()
 
     def _go():
@@ -714,7 +725,6 @@ class LapScore:
         self.raw_time = 0.0; self.closed_at = None
         self.wall_hits = self.atk_hits = self.vic_hits = self.corner_cuts = 0
         self.overspeed = self.voided = False; self._pen = self._bon = 0.0
-        self.top_speed_kmh = 0.0   # max speed recorded during this lap (km/h)
 
     def add_wall_hit(self):
         self._pen += WALL_HIT_PENALTY; self.wall_hits += 1
@@ -755,10 +765,9 @@ class ScoringEngine:
     def register(self, cid, name): self._names[cid] = name
     def open_lap(self, cid, n): self._open[cid] = LapScore(cid, self._names.get(cid, f"Car{cid}"), n)
 
-    def close_lap(self, cid, raw, top_speed_kmh=0.0):
+    def close_lap(self, cid, raw):
         lap = self._open.pop(cid, None) or LapScore(cid, self._names.get(cid, f"Car{cid}"), 0)
         lap.raw_time = raw; lap.closed_at = time.time()
-        lap.top_speed_kmh = round(top_speed_kmh, 2)
         self._history[cid].append(lap)
         msg = f"📊 LAP | {lap.car_name} Lap {lap.lap_number} raw={raw:.2f}s ELP={lap.elp:.2f}s"
         if PRINT_LAP_EVENTS: print(msg)
@@ -902,10 +911,6 @@ class LapEngine:
         if currently_in and not self._in_sf_zone:
             # Rising edge: just entered the zone — this is the crossing.
             self._in_sf_zone = True
-            # ── Guard: car already completed all laps — ignore forever ────
-            if self.race_finished:
-                print(f"[SF] {self.car_name} crossed S/F but race already finished — ignored")
-                return None
             if now - self._last_cross < MIN_LAP_TIME:
                 print(f"[SF] {self.car_name} debounce — ignored (dist={dist:.1f}cm)")
                 return None
@@ -945,13 +950,7 @@ class LapEngine:
             return dict(type='lap_void', car_id=self.car_id, car_name=self.car_name, lap=self.current_lap, time=now)
 
         raw = now - self._lap_start
-        # Pull the tag's per-lap max speed (cm/s → km/h) then reset it so
-        # the next lap starts accumulating from zero.
-        tag_state = tags.get(self.car_id)
-        top_kmh = (tag_state.max_speed_ms * 0.036) if tag_state else 0.0
-        if tag_state:
-            tag_state.max_speed_ms = 0.0
-        ls  = self.scoring.close_lap(self.car_id, raw, top_speed_kmh=top_kmh)
+        ls  = self.scoring.close_lap(self.car_id, raw)
         self._lap_times.append(raw); self.laps_done += 1
         self._cp_touched_this_lap = set()
         self.current_lap_cp_hits = []
@@ -1133,11 +1132,16 @@ class CollisionEngine:
         evts = []
         for cid, d in cars.items():
             px, py = d['x'], d['y']
-            prev = self._pos.get(cid)
-            if prev:
-                dx, dy = px - prev[0], py - prev[1]
-                if math.hypot(dx, dy) > 0.3:   # only update heading if moving
-                    self._heading[cid] = math.atan2(dy, dx)
+            # Use IMU heading if available (more accurate than position delta)
+            imu = imu_store.get(cid)
+            if imu and abs(imu.get('gz', 0)) > GYRO_DEADBAND:
+                self._heading[cid] = math.radians(imu['heading'])
+            else:
+                prev = self._pos.get(cid)
+                if prev:
+                    dx, dy = px - prev[0], py - prev[1]
+                    if math.hypot(dx, dy) > 0.3:
+                        self._heading[cid] = math.atan2(dy, dx)
             self._pos[cid] = (px, py, now)
             self._speeds[cid] = d.get('speed', 0.0)
             self._laps[cid] = d.get('lap', 0)
@@ -1287,8 +1291,6 @@ def build_state(now):
                          history=sc['history']),
             wall_hits=len(col_eng.wall_hits(tid)),
             car_collisions=len(col_eng.car_events(tid)),
-            atk_collisions=sum(1 for e in col_eng.car_events(tid) if e['attacker'] == tid),
-            vic_collisions=sum(1 for e in col_eng.car_events(tid) if e['victim'] == tid),
             pkt_accepted=tag.pkt_accepted, pkt_rejected=tag.pkt_rejected))
     return json.dumps(dict(
         type="state_update", timestamp=now,
@@ -1330,6 +1332,62 @@ def _serialize_cp_active() -> dict:
 # UDP RECEIVER  — AT+RANGE parser with full three-layer filtering
 # ═══════════════════════════════════════════════════════════════════════
 
+# ═══════════════════════════════════════════════════════════════════════
+# IMU UDP LISTENER  — T0,IMU,heading,gz,ax,ay,az,gx,gy,ts
+# ═══════════════════════════════════════════════════════════════════════
+
+def imu_listener():
+    """
+    Receives IMU packets from the tag on UDP port 4211.
+    Packet format: T0,IMU,293.54,0.0903,16.856,7.353,7.377,0.0314,-0.0887,105585
+    Fields:        T{id},IMU,heading,gz,ax,ay,az,gx,gy,timestamp_ms
+    Writes parsed data into imu_store[tag_id] — thread-safe for dict assignment.
+    """
+    global running
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(('', IMU_UDP_PORT))
+    sock.settimeout(0.1)
+    print(f"[IMU] Listening on port {IMU_UDP_PORT}")
+    while running:
+        try:
+            data, _ = sock.recvfrom(512)
+            line = data.decode('utf-8', errors='ignore').strip()
+            parts = line.split(',')
+            if len(parts) < 10 or parts[1] != 'IMU':
+                continue
+            tid = int(parts[0][1:])  # 'T0' → 0
+            imu_store[tid] = {
+                'heading': float(parts[2]),
+                'gz':      float(parts[3]),
+                'ax':      float(parts[4]),
+                'ay':      float(parts[5]),
+                'az':      float(parts[6]),
+                'gx':      float(parts[7]),
+                'gy':      float(parts[8]),
+                'ts':      int(parts[9]),
+            }
+        except socket.timeout:
+            continue
+        except Exception as e:
+            if running:
+                print(f"[IMU] Parse error: {e}")
+    sock.close()
+    print("[IMU] Stopped")
+
+
+def imu_is_static(tid: int) -> bool:
+    """Return True if the car appears stationary based on IMU data."""
+    d = imu_store.get(tid)
+    if not d:
+        return False  # no IMU data — assume moving (conservative)
+    gz    = abs(d.get('gz', 0))
+    ax    = d.get('ax', 0)
+    ay    = d.get('ay', 0)
+    accel = math.sqrt(ax**2 + ay**2)
+    return gz < STATIC_GYRO_THR and accel < STATIC_ACCEL_THR
+
+
 def udp_receiver():
     global running
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -1370,8 +1428,16 @@ def udp_receiver():
             if pos is None:
                 tag.pkt_rejected += 1; stats['udp_invalid'] += 1
                 continue
-            # ── LAYER 3: Kalman on (x, y) ─────────────────────────────
-            rx, ry = tag._filter.filter_position(pos[0], pos[1], now)
+            # ── LAYER 3: Kalman on (x, y) — with IMU static gating ───
+            # When IMU reports car is stationary, raise R so the Kalman
+            # filter trusts UWB measurements less → kills position jitter.
+            if imu_is_static(tid):
+                orig_R = tag._filter._kf.R.copy()
+                tag._filter._kf.R = orig_R * STATIC_KALMAN_R_MULT
+                rx, ry = tag._filter.filter_position(pos[0], pos[1], now)
+                tag._filter._kf.R = orig_R
+            else:
+                rx, ry = tag._filter.filter_position(pos[0], pos[1], now)
             
             # ── CLAMP POSITION TO ANCHOR BOUNDING BOX ─────────────────
             # Prevents negative/outside jumps caused by UWB multipath/NLOS errors
@@ -1391,9 +1457,11 @@ def udp_receiver():
             if connected_clients and event_loop:
                 li = race_mgr.get_info(tid, now)
                 open_lap = scoring._open.get(tid)
+                imu = imu_store.get(tid, {})
                 msg = json.dumps(dict(
                     type="tag_position", tag_id=tid,
                     x=round(rx, 4), y=round(ry, 4),
+                    heading=round(imu.get('heading', 0.0), 2),
                     range=tag.last_ranges,
                     speed=round(tag.speed_display(), 2),
                     speed_ms=round(tag.speed_ms, 3),
@@ -1402,11 +1470,16 @@ def udp_receiver():
                     timestamp=now, game_events=game_evts,
                     wall_hits=len(col_eng.wall_hits(tid)),
                     car_collisions=len(col_eng.car_events(tid)),
-                    atk_collisions=sum(1 for e in col_eng.car_events(tid) if e['attacker'] == tid),
-                    vic_collisions=sum(1 for e in col_eng.car_events(tid) if e['victim'] == tid),
                     current_penalty=round(open_lap._pen,2) if open_lap else 0.0,
                     current_bonus=round(open_lap._bon,2) if open_lap else 0.0,
                     lap_info=li,
+                    imu=dict(
+                        gz=round(imu.get('gz', 0.0), 4),
+                        ax=round(imu.get('ax', 0.0), 3),
+                        ay=round(imu.get('ay', 0.0), 3),
+                        heading=round(imu.get('heading', 0.0), 2),
+                        static=imu_is_static(tid),
+                    ) if imu else None,
                     checkpoint_touches=_serialize_cp_touches(), cp_active_lap=_serialize_cp_active()))
                 asyncio.run_coroutine_threadsafe(broadcast(msg), event_loop)
             if game_evts:
@@ -1598,7 +1671,7 @@ async def main():
 
     print(f"\n{'═'*60}")
     print(f"  UWB RACING — AT+RANGE parser  |  all units: CENTIMETRES")
-    print(f"  UDP={UDP_PORT}  WS={WS_PORT}")
+    print(f"  UDP={UDP_PORT}  IMU={IMU_UDP_PORT}  WS={WS_PORT}")
     print(f"  Anchors: {dict(ANCHOR_POSITIONS)}")
     print(f"  Field: {max(ax)-min(ax):.2f}cm × {max(ay)-min(ay):.2f}cm")
     print(f"  Filtering pipeline:")
@@ -1607,7 +1680,8 @@ async def main():
     print(f"    L3 Kalman (x,y)     : R={KALMAN_R}  Q={KALMAN_Q}  dt={KALMAN_DT}s")
     print(f"{'═'*60}\n")
 
-    threading.Thread(target=udp_receiver, daemon=True, name="UDP").start()
+    threading.Thread(target=udp_receiver,  daemon=True, name="UDP").start()
+    threading.Thread(target=imu_listener,  daemon=True, name="IMU").start()
     asyncio.create_task(stats_reporter())
     try:
         async with websockets.serve(handle_client, "0.0.0.0", WS_PORT):
