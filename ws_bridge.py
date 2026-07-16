@@ -100,6 +100,15 @@ STATIC_FRAMES_TO_FREEZE = 8      # consecutive static IMU frames before freeze
 MOTION_FRAMES_TO_UNFREEZE = 3    # consecutive motion frames before unfreeze
 # When frozen, Kalman state velocity is zeroed so no velocity artifact on restart
 
+# ── Forward/backward (reverse) detection ────────────────────────────────
+# Facing direction comes from the gyro-derived IMU heading (see CollisionEngine
+# heading tracking below). Actual movement direction comes from the position
+# delta between updates. If the two disagree by more than REVERSE_ANGLE_THR_DEG
+# while the car is moving faster than REVERSE_MIN_SPEED_CMS, the car is
+# considered to be reversing (driving backward relative to where it's facing).
+REVERSE_ANGLE_THR_DEG   = 100.0  # degrees — >90° apart means moving backward
+REVERSE_MIN_SPEED_CMS   = 15.0   # cm/s — ignore jitter near-standstill
+
 # IMU data per tag — written by imu_listener thread, read by udp_receiver
 # {tag_id: {heading, gz, ax, ay, az, gx, gy, ts}}
 imu_store: dict = {}
@@ -237,9 +246,14 @@ CORNER_CUT_VOID_LAP        = False
 CAR_COLLISION_DISTANCE_M   = 25.0   # fallback centre-to-centre pre-check
 CAR_COLLISION_COOLDOWN     = 1.0
 
-# Physical car dimensions in CENTIMETRES (F1-style RC car, tag at centre)
+# Physical car dimensions in CENTIMETRES (F1-style RC car, tag at centre).
+# These are now just the FALLBACK/DEFAULT dimensions used when a car hasn't
+# been assigned its own length/width (see CollisionEngine.set_car_dims /
+# CAR_DIMS_DEFAULT below) — per-car dims from the tag-assignment UI take
+# priority and are used to compute each car's own collision rectangle.
 CAR_LENGTH_CM = 40.0   # square car — both sides equal
 CAR_WIDTH_CM  = 40.0   # square car — both sides equal
+CAR_DIMS_DEFAULT = (CAR_LENGTH_CM, CAR_WIDTH_CM)
 SPEED_DIFF_THRESHOLD       = 10.0
 WALL_TOLERANCE_M           = 5.0
 WALL_COLLISION_COOLDOWN    = 0.5
@@ -1155,11 +1169,13 @@ class RaceManager:
 # COLLISION ENGINE
 # ═══════════════════════════════════════════════════════════════════════
 
-def _car_corners(x, y, heading):
+def _car_corners(x, y, heading, length=CAR_LENGTH_CM, width=CAR_WIDTH_CM):
     """Return 4 corners of the car rectangle in track-space (cm),
-    given tag position (x,y) as the rectangle centre and heading in radians."""
-    hl = CAR_LENGTH_CM / 2
-    hw = CAR_WIDTH_CM  / 2
+    given tag position (x,y) as the rectangle centre and heading in radians.
+    length/width default to the global fallback dims but callers pass the
+    car's own configured dimensions when known (see CollisionEngine)."""
+    hl = length / 2
+    hw = width  / 2
     cos_h, sin_h = math.cos(heading), math.sin(heading)
     # local corners: (±hl, ±hw), rotated by heading
     offsets = [( hl,  hw), ( hl, -hw), (-hl, -hw), (-hl,  hw)]
@@ -1167,8 +1183,11 @@ def _car_corners(x, y, heading):
             for dx, dy in offsets]
 
 
-def _obb_overlap(cx1, cy1, h1, cx2, cy2, h2):
+def _obb_overlap(cx1, cy1, h1, cx2, cy2, h2, dims1=CAR_DIMS_DEFAULT, dims2=CAR_DIMS_DEFAULT):
     """Separating Axis Theorem test for two OBBs (oriented bounding boxes).
+    dims1/dims2 are (length, width) tuples in cm for each car respectively —
+    this lets each car's own configured size drive its collision rectangle
+    instead of a single fixed size for every car.
     Returns True if the two car rectangles overlap."""
     def axes(h):
         return [(math.cos(h), math.sin(h)), (-math.sin(h), math.cos(h))]
@@ -1177,8 +1196,8 @@ def _obb_overlap(cx1, cy1, h1, cx2, cy2, h2):
         dots = [ax[0]*c[0] + ax[1]*c[1] for c in corners]
         return min(dots), max(dots)
 
-    c1 = _car_corners(cx1, cy1, h1)
-    c2 = _car_corners(cx2, cy2, h2)
+    c1 = _car_corners(cx1, cy1, h1, dims1[0], dims1[1])
+    c2 = _car_corners(cx2, cy2, h2, dims2[0], dims2[1])
     for ax in axes(h1) + axes(h2):
         lo1, hi1 = project(c1, ax)
         lo2, hi2 = project(c2, ax)
@@ -1194,27 +1213,81 @@ class CollisionEngine:
         self._laps = {}; self._racing = {}
         self._car_cd = {}; self._wall_cd = {}
         self._heading = {}   # last known heading per car (radians)
+        self._dims = {}      # cid -> (length_cm, width_cm), per-car collision size
+        self._reversing = {} # cid -> bool, True while driving backward
         self.events = []; self.anomalies = []
 
     def register(self, cid, name): self._names[cid] = name
     def set_track(self, trk): self.track = trk
 
+    def get_car_dims(self, cid):
+        return self._dims.get(cid, CAR_DIMS_DEFAULT)
+
+    def set_car_dims(self, dims_map):
+        """Update per-car collision dimensions.
+        dims_map: {cid: (length_cm, width_cm)} or {cid: {"length":.., "width":..}},
+        cid keys may be int or str. Values <= 0 or missing fall back to the
+        global default so a bad/partial entry never zeroes out a car's size."""
+        for k, v in (dims_map or {}).items():
+            try:
+                cid = int(k)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(v, dict):
+                length = v.get('length'); width = v.get('width')
+            elif isinstance(v, (list, tuple)) and len(v) >= 2:
+                length, width = v[0], v[1]
+            else:
+                continue
+            try:
+                length = float(length) if length else CAR_DIMS_DEFAULT[0]
+                width  = float(width)  if width  else CAR_DIMS_DEFAULT[1]
+            except (TypeError, ValueError):
+                length, width = CAR_DIMS_DEFAULT
+            if length <= 0: length = CAR_DIMS_DEFAULT[0]
+            if width  <= 0: width  = CAR_DIMS_DEFAULT[1]
+            self._dims[cid] = (length, width)
+        if dims_map:
+            print(f"[DIMS] car_dims = { {c: self._dims[c] for c in self._dims} }")
+
+    def is_reversing(self, cid):
+        return self._reversing.get(cid, False)
+
     def update(self, cars, now):
         evts = []
         for cid, d in cars.items():
             px, py = d['x'], d['y']
+            prev = self._pos.get(cid)   # position before this update, used below too
             # Use IMU heading if available (more accurate than position delta)
             imu = imu_store.get(cid)
             if imu and abs(imu.get('gz', 0)) > IMU_GYRO_DEADBAND:
                 self._heading[cid] = math.radians(imu['heading'])
             else:
-                prev = self._pos.get(cid)
                 if prev:
                     dx, dy = px - prev[0], py - prev[1]
                     if math.hypot(dx, dy) > 0.3:
                         self._heading[cid] = math.atan2(dy, dx)
+
+            # ── Forward/backward detection ──────────────────────────────
+            # Facing direction = gyro-derived heading above. Actual movement
+            # direction = position delta. If they point opposite ways while
+            # the car has real speed, the car is reversing. Stale/near-zero
+            # movement frames keep the last known reversing state instead of
+            # resetting it, so a single noisy frame can't flicker the flag.
+            spd = d.get('speed', 0.0)
+            if prev and spd > REVERSE_MIN_SPEED_CMS:
+                dx, dy = px - prev[0], py - prev[1]
+                if math.hypot(dx, dy) > 0.3:
+                    move_dir = math.atan2(dy, dx)
+                    facing = self._heading.get(cid, move_dir)
+                    diff = math.degrees(abs(math.atan2(
+                        math.sin(move_dir - facing), math.cos(move_dir - facing))))
+                    self._reversing[cid] = diff > REVERSE_ANGLE_THR_DEG
+            elif spd <= REVERSE_MIN_SPEED_CMS:
+                self._reversing[cid] = False   # stopped/slow — not reversing
+
             self._pos[cid] = (px, py, now)
-            self._speeds[cid] = d.get('speed', 0.0)
+            self._speeds[cid] = spd
             self._laps[cid] = d.get('lap', 0)
             self._racing[cid] = d.get('racing', False)
             spd = self._speeds[cid]
@@ -1236,22 +1309,41 @@ class CollisionEngine:
     def _car(self, a, b, now):
         pa = self._pos.get(a); pb = self._pos.get(b)
         if not pa or not pb: return None
-        # Quick centre-to-centre pre-check (cheap reject before OBB test)
+        dims_a = self._dims.get(a, CAR_DIMS_DEFAULT); dims_b = self._dims.get(b, CAR_DIMS_DEFAULT)
+        # Quick centre-to-centre pre-check (cheap reject before OBB test).
+        # Uses each car's own configured length so bigger/smaller cars get a
+        # correctly sized collision radius instead of the old fixed value.
         dist = math.hypot(pa[0]-pb[0], pa[1]-pb[1])
-        if dist > CAR_LENGTH_CM + 10: return None   # definitely not touching
+        if dist > max(dims_a[0], dims_b[0]) + 10: return None   # definitely not touching
         key = frozenset([a, b])
         if now - self._car_cd.get(key, 0) < CAR_COLLISION_COOLDOWN: return None
-        # Full OBB overlap test using actual car rectangles
+        # Full OBB overlap test using actual car rectangles (per-car dims)
         ha = self._heading.get(a, 0); hb = self._heading.get(b, 0)
-        if not _obb_overlap(pa[0], pa[1], ha, pb[0], pb[1], hb): return None
+        if not _obb_overlap(pa[0], pa[1], ha, pb[0], pb[1], hb, dims_a, dims_b): return None
         self._car_cd[key] = now
-        sa = self._speeds.get(a, 0); sb = self._speeds.get(b, 0)
-        atk, vic = ((a, b) if abs(sa-sb) >= SPEED_DIFF_THRESHOLD and sa >= sb
-                    else ((b, a) if abs(sa-sb) >= SPEED_DIFF_THRESHOLD else (a, b)))
+
+        # ── Aggressor determination ─────────────────────────────────────
+        # A reversing car is ALWAYS the aggressor, regardless of speed, and
+        # only that car takes the penalty. This check happens before — and
+        # overrides — the normal speed-based forward-collision logic, which
+        # is otherwise left completely unchanged.
+        rev_a = self._reversing.get(a, False); rev_b = self._reversing.get(b, False)
+        if rev_a and not rev_b:
+            atk, vic = a, b
+        elif rev_b and not rev_a:
+            atk, vic = b, a
+        else:
+            # Existing forward-collision logic (unchanged): also used as the
+            # fallback when neither car is reversing, or both are.
+            sa = self._speeds.get(a, 0); sb = self._speeds.get(b, 0)
+            atk, vic = ((a, b) if abs(sa-sb) >= SPEED_DIFF_THRESHOLD and sa >= sb
+                        else ((b, a) if abs(sa-sb) >= SPEED_DIFF_THRESHOLD else (a, b)))
+
         self.scoring.car_collision(atk, vic)
         an = self._names.get(atk, f"Car{atk}"); vn = self._names.get(vic, f"Car{vic}")
         if PRINT_COLLISION_EVENTS:
-            print(f"💥 CAR | {an}→{vn} dist={dist:.1f}cm  "
+            tag = " [REVERSE]" if self._reversing.get(atk, False) else ""
+            print(f"💥 CAR | {an}→{vn} dist={dist:.1f}cm{tag}  "
                   f"atk+{CAR_COLLISION_ATTACKER_PENALTY}s / vic-{CAR_COLLISION_VICTIM_BONUS}s")
         return dict(type='car', attacker=atk, victim=vic,
                     attacker_name=an, victim_name=vn, dist=round(dist, 3),
@@ -1261,7 +1353,8 @@ class CollisionEngine:
         if not self.track or not self.track.has_width(): return None
         if now - self._wall_cd.get(cid, 0) < WALL_COLLISION_COOLDOWN: return None
         heading = self._heading.get(cid, 0)
-        corners = _car_corners(x, y, heading)
+        dims = self._dims.get(cid, CAR_DIMS_DEFAULT)
+        corners = _car_corners(x, y, heading, dims[0], dims[1])
         # Check if ANY corner of the car rectangle is outside the track boundary
         outer_pts = self.track.get_outer_points()
         inner_pts = self.track.get_inner_points()
@@ -1494,8 +1587,8 @@ def udp_receiver():
             rx, ry = tag._filter.filter_position(pos[0], pos[1], now)
 
             # ── CLAMP POSITION TO ANCHOR BOUNDING BOX ─────────────────
-            rx = max(0.0, min(rx, 655.0))
-            ry = max(0.0, min(ry, 920.0))
+            # rx = max(0.0, min(rx, 655.0))
+            # ry = max(0.0, min(ry, 920.0))
 
             # ── LAYER 4: ZUPT — freeze when stationary ─────────────────
             # Kalman speed in cm/s for fallback detection
@@ -1630,6 +1723,10 @@ async def handle_client(ws):
                     current_group_id      = d.get('group_id')
                     current_tournament_id = d.get('tournament_id')
 
+                    car_dims = d.get('car_dims', {})
+                    if car_dims:
+                        col_eng.set_car_dims(car_dims)
+
                     track_csv = d.get('track_csv', '')
                     if track_csv:
                         td = parse_track_csv(track_csv)
@@ -1660,6 +1757,12 @@ async def handle_client(ws):
                     print(f"[CMD] Start  group={current_group_id}  laps={TOTAL_LAPS}  "
                           f"wall={WALL_HIT_PENALTY}s  atk={CAR_COLLISION_ATTACKER_PENALTY}s  "
                           f"vic_bonus={CAR_COLLISION_VICTIM_BONUS}s")
+
+                elif mt == 'update_car_dims':
+                    # Live per-car length/width update (e.g. edited from a
+                    # player's tag row) — takes effect immediately without
+                    # needing a full admin_start/race restart.
+                    col_eng.set_car_dims(d.get('dims', {}))
 
                 elif mt == 'reset':
                     race_mgr.reset(); col_eng.reset(); race_armed = False

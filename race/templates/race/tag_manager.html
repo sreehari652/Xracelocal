@@ -748,6 +748,44 @@
       color: var(--yellow)
     }
 
+    .dim-row {
+      display: flex;
+      gap: 6px;
+      margin-top: 6px;
+    }
+
+    .dim-field {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      min-width: 0;
+    }
+
+    .dim-field label {
+      font-size: .62rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      flex-shrink: 0;
+    }
+
+    .dim-inp {
+      width: 100%;
+      min-width: 0;
+      padding: 6px 7px;
+      border-radius: 5px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: .78rem;
+      outline: none;
+      text-align: center;
+    }
+
+    .dim-inp:focus { border-color: var(--accent); }
+
     .ph {
       color: var(--muted);
       font-size: .85rem;
@@ -954,6 +992,38 @@
     }
     .tag-assign-inp:focus { border-color: var(--accent); }
     .tag-assign-inp.has-val { border-color: rgba(0,255,136,0.5); color: var(--green); }
+    .tag-assign-row { flex-wrap: wrap; }
+    .tag-assign-dims-row {
+      flex-basis: 100%;
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      margin-top: 8px;
+    }
+    .tag-assign-dim {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .tag-assign-dim label {
+      font-size: .62rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .5px;
+    }
+    .tag-assign-dim-inp {
+      width: 64px;
+      padding: 6px 8px;
+      border-radius: 5px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: .78rem;
+      text-align: center;
+      outline: none;
+    }
+    .tag-assign-dim-inp:focus { border-color: var(--accent); }
     #tagModalFooter {
       padding: 16px 24px;
       border-top: 1px solid var(--border);
@@ -1282,6 +1352,9 @@
     let raceConfig = { total_laps: 10, collision_absorbing_time: null, collision_creating_time: null, object_collision_time: null };
     let liveTrack = { center: [], inner: [], outer: [], checkpoints: [], start_finish: { x: 490, y1: 300, y2: 340, dir: 'left_to_right' } };
     let players = [], tagData = {}, reassignMode = false, liveLeaderboard = [], packetsThisSec = 0, totalPackets = 0;
+    // carDims[gp_id] = { length, width } in cm — per-car collision size, editable when assigning a tag.
+    let carDims = {};
+    const CAR_DIM_DEFAULT = CAR_SIZE_CM; // default length/width shown when a player has no custom size yet
     let cpTouches = {};      // sidebar panel: all-time history per CP
     let cpActiveLap = {};    // canvas dots: only cars active THIS lap per CP, resets per car on lap done
 
@@ -2208,6 +2281,17 @@
     // RACE ACTIONS
     // ═══════════════════════════════════════════════════════════
     function buildTagMap() { const map={}; players.forEach(p=>{if(p.tag_id!==null&&p.tag_id!==undefined) map[String(p.tag_id)]=p.gp_id;}); return map; }
+    function getCarDim(gpId) { return carDims[gpId] || { length: CAR_DIM_DEFAULT, width: CAR_DIM_DEFAULT }; }
+    // Bridge keys collision dims by tag_id (not gp_id) — only players with a tag assigned are included.
+    function buildCarDimsMap() {
+      const map={};
+      players.forEach(p=>{
+        if (p.tag_id===null||p.tag_id===undefined) return;
+        const dim=getCarDim(p.gp_id);
+        map[String(p.tag_id)]={length:dim.length,width:dim.width};
+      });
+      return map;
+    }
 
     async function doLive() {
       if (!currentGroupId) return;
@@ -2217,7 +2301,7 @@
       opt.dataset.status='live'; opt.textContent=opt.textContent.replace(/\s*\[.*?\]\s*$/,'')+' [live]';
       cpTouches={}; cpActiveLap={}; renderCpPanel(); resetAllEma();
       await pushScreen('counter');
-      sendWS({type:'admin_start',group_id:parseInt(currentGroupId),tournament_id:currentTournamentId,total_laps:currentTotalLaps,tag_map:buildTagMap(),race_config:raceConfig,track_csv:currentTrackCSV,checkpoints_required:CHECKPOINTS_REQUIRED});
+      sendWS({type:'admin_start',group_id:parseInt(currentGroupId),tournament_id:currentTournamentId,total_laps:currentTotalLaps,tag_map:buildTagMap(),car_dims:buildCarDimsMap(),race_config:raceConfig,track_csv:currentTrackCSV,checkpoints_required:CHECKPOINTS_REQUIRED});
       appendFeed([`▶ Group ${currentGroupId} LIVE – ${currentTotalLaps} laps, ${CHECKPOINTS_REQUIRED} CPs/lap`]);
       renderPlayers();
      
@@ -2249,6 +2333,7 @@
       body.innerHTML = players.map((p, idx) => {
         const color = COLORS[idx % COLORS.length];
         const tid = (p.tag_id !== null && p.tag_id !== undefined) ? p.tag_id : '';
+        const dim = getCarDim(p.gp_id);
         return `<div class="tag-assign-row">
           <div class="tag-assign-dot" style="background:${color};box-shadow:0 0 6px ${color}"></div>
           <div>
@@ -2266,6 +2351,16 @@
             data-idx="${idx}"
             oninput="onTagModalInput(this)"
           />
+          <div class="tag-assign-dims-row">
+            <div class="tag-assign-dim">
+              <label>Length cm</label>
+              <input class="tag-assign-dim-inp" type="number" min="1" step="0.5" value="${dim.length}" data-gp="${p.gp_id}" data-axis="length" />
+            </div>
+            <div class="tag-assign-dim">
+              <label>Width cm</label>
+              <input class="tag-assign-dim-inp" type="number" min="1" step="0.5" value="${dim.width}" data-gp="${p.gp_id}" data-axis="width" />
+            </div>
+          </div>
         </div>`;
       }).join('');
       document.getElementById('tagModal').classList.add('open');
@@ -2282,6 +2377,14 @@
 
     async function confirmTagsAndRestart() {
       if (!confirm('Save tag assignments and restart race?')) return;
+
+      // Save length/width for every player (defaults to CAR_DIM_DEFAULT if left untouched)
+      document.querySelectorAll('.tag-assign-dim-inp').forEach(inp => {
+        const gpId = inp.dataset.gp, axis = inp.dataset.axis;
+        const val = parseFloat(inp.value);
+        const cur = getCarDim(gpId);
+        carDims[gpId] = { ...cur, [axis]: (val > 0 ? val : CAR_DIM_DEFAULT) };
+      });
 
       // Save all tag inputs
       const inputs = document.querySelectorAll('.tag-assign-inp');
@@ -2322,7 +2425,7 @@
       sendWS({ type: 'reset' });
       cpTouches = {}; renderCpPanel(); resetAllEma();
       await pushScreen('counter');
-      sendWS({type:'admin_start',group_id:parseInt(currentGroupId),tournament_id:currentTournamentId,total_laps:currentTotalLaps,tag_map:buildTagMap(),race_config:raceConfig,track_csv:currentTrackCSV,checkpoints_required:CHECKPOINTS_REQUIRED});
+      sendWS({type:'admin_start',group_id:parseInt(currentGroupId),tournament_id:currentTournamentId,total_laps:currentTotalLaps,tag_map:buildTagMap(),car_dims:buildCarDimsMap(),race_config:raceConfig,track_csv:currentTrackCSV,checkpoints_required:CHECKPOINTS_REQUIRED});
       Object.keys(tagData).forEach(tid => { tagData[tid].trail = []; tagData[tid].lapInfo = null; tagData[tid].lapStartTime = null; });
       currentGroupStatus = 'live'; reassignMode = false; setBadge('live');
       appendFeed(['▶ Race restarted — tags reassigned, track reloaded, LIVE']);
@@ -2378,7 +2481,8 @@
           const lb=liveLeaderboard.find(r=>r.car_id===tid),bestElp=(lb&&lb.best_elp<1e9)?lb.best_elp:null;
           if (bestElp!=null) lapLine=`<div class="pcard-timing"><div class="pcard-timing-row"><span class="pcard-timing-label">BEST LAP</span><span class="pcard-timing-value best">${fmtLapTime(bestElp)}</span></div></div>`;
         }
-        const tagInput=editable?`<div class="tag-row"><input class="tag-inp" type="text" value="${!isNaN(tid)?tid:''}" placeholder="Tag ID (number)" data-gp="${p.gp_id}" onblur="saveTag(this)" onkeydown="if(event.key==='Enter'){event.preventDefault();saveTag(this)}"/><div class="tag-hint" id="hint-${p.gp_id}"></div></div>`:'';
+        const dim=getCarDim(p.gp_id);
+        const tagInput=editable?`<div class="tag-row"><input class="tag-inp" type="text" value="${!isNaN(tid)?tid:''}" placeholder="Tag ID (number)" data-gp="${p.gp_id}" onblur="saveTag(this)" onkeydown="if(event.key==='Enter'){event.preventDefault();saveTag(this)}"/><div class="tag-hint" id="hint-${p.gp_id}"></div><div class="dim-row"><div class="dim-field"><label>L</label><input class="dim-inp" type="number" min="1" step="0.5" value="${dim.length}" data-gp="${p.gp_id}" data-axis="length" onblur="saveDim(this)"/></div><div class="dim-field"><label>W</label><input class="dim-inp" type="number" min="1" step="0.5" value="${dim.width}" data-gp="${p.gp_id}" data-axis="width" onblur="saveDim(this)"/></div></div></div>`:'';
         return `<div class="pcard ${racing?'active pulse':''}" style="--cc:${color}"><div class="pcard-hdr"><div class="pcard-dot"></div><div class="pcard-name">${p.player_name}</div>${!isNaN(tid)?`<span class="pcard-tag">#${tid}</span>`:''}<button class="btn btn-raw" style="padding:2px 6px;font-size:0.6rem;margin-left:auto;" onclick="sendWallCmd('player_laps', {gp_id: '${p.gp_id}', tag_id: '${p.tag_id}', player_name: '${p.player_name.replace(/'/g,"\\'")}'}); event.stopPropagation();">Wall Laps</button></div><div class="pcard-sub">${p.player_status||''}</div>${posLine}${lapLine}${tagInput}</div>`;
       }).join('');
     }
@@ -2398,6 +2502,25 @@
       const res=await apiPatch(API.updateTag,{gp_id:gpId,tag_id:rawId||null});
       if (res.success) { hint.textContent='✓ Saved'; hint.className='tag-hint ok'; setTimeout(()=>{hint.textContent='';hint.className='tag-hint';},2000); const player=players.find(p=>p.gp_id==gpId); if (player) { player.tag_id=rawId?parseInt(rawId,10):null; refreshDebugBar(); } }
       else { hint.textContent='✗ Error'; hint.className='tag-hint err'; setTimeout(()=>{hint.textContent='';hint.className='tag-hint';},2500); }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // SAVE CAR LENGTH / WIDTH (collision radius dims)
+    // ═══════════════════════════════════════════════════════════
+    function saveDim(input) {
+      if (!canEditTags()) return;
+      const gpId=input.dataset.gp, axis=input.dataset.axis;
+      const val=parseFloat(input.value);
+      const cur=getCarDim(gpId);
+      const next={ ...cur, [axis]: (val>0 ? val : CAR_DIM_DEFAULT) };
+      carDims[gpId]=next;
+      input.value=next[axis];
+      // Push live to the bridge immediately if this player already has a tag assigned,
+      // so the collision radius updates without waiting for a full race restart.
+      const player=players.find(p=>String(p.gp_id)===String(gpId));
+      if (player && player.tag_id!==null && player.tag_id!==undefined) {
+        sendWS({type:'update_car_dims', dims:{ [String(player.tag_id)]: { length: next.length, width: next.width } }});
+      }
     }
 
     // ═══════════════════════════════════════════════════════════
