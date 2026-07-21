@@ -251,8 +251,8 @@ CAR_COLLISION_COOLDOWN     = 1.0
 # been assigned its own length/width (see CollisionEngine.set_car_dims /
 # CAR_DIMS_DEFAULT below) — per-car dims from the tag-assignment UI take
 # priority and are used to compute each car's own collision rectangle.
-CAR_LENGTH_CM = 40.0   # square car — both sides equal
-CAR_WIDTH_CM  = 40.0   # square car — both sides equal
+CAR_LENGTH_CM = 20.0   # default car length in cm (20cm)
+CAR_WIDTH_CM  = 7.0    # default car width in cm (7cm)
 CAR_DIMS_DEFAULT = (CAR_LENGTH_CM, CAR_WIDTH_CM)
 SPEED_DIFF_THRESHOLD       = 10.0
 WALL_TOLERANCE_M           = 5.0
@@ -1183,12 +1183,29 @@ def _car_corners(x, y, heading, length=CAR_LENGTH_CM, width=CAR_WIDTH_CM):
             for dx, dy in offsets]
 
 
-def _obb_overlap(cx1, cy1, h1, cx2, cy2, h2, dims1=CAR_DIMS_DEFAULT, dims2=CAR_DIMS_DEFAULT):
-    """Separating Axis Theorem test for two OBBs (oriented bounding boxes).
-    dims1/dims2 are (length, width) tuples in cm for each car respectively —
-    this lets each car's own configured size drive its collision rectangle
-    instead of a single fixed size for every car.
-    Returns True if the two car rectangles overlap."""
+# Minimum penetration depth (cm) required to register a car-to-car collision.
+# Two OBBs must overlap by at least this much on ALL SAT axes.
+# ─ Increase to require deeper overlap (fewer, more definite collisions)
+# ─ Decrease toward 0 to trigger on first touch
+# Rule of thumb for RC cars: 5–10cm works well with UWB noise of ±5cm
+CAR_COLLISION_MIN_OVERLAP_CM = 5.0
+
+
+def _obb_penetration(cx1, cy1, h1, cx2, cy2, h2,
+                     dims1=CAR_DIMS_DEFAULT, dims2=CAR_DIMS_DEFAULT) -> float:
+    """
+    Separating Axis Theorem — returns the minimum penetration depth (cm)
+    across all 4 SAT axes, or -1.0 if the rectangles are NOT overlapping.
+
+    Positive return value = how deeply the two OBBs are overlapping.
+    The caller compares this against CAR_COLLISION_MIN_OVERLAP_CM to decide
+    whether the overlap is deep enough to count as a real collision.
+
+    Using penetration depth instead of a binary True/False means:
+      - UWB position noise (±5cm) causing phantom 2-3cm overlaps → ignored
+      - Only meaningful physical contact (cars actually into each other) fires
+      - No dependency on exact sensor_offset calibration for collision tuning
+    """
     def axes(h):
         return [(math.cos(h), math.sin(h)), (-math.sin(h), math.cos(h))]
 
@@ -1198,12 +1215,18 @@ def _obb_overlap(cx1, cy1, h1, cx2, cy2, h2, dims1=CAR_DIMS_DEFAULT, dims2=CAR_D
 
     c1 = _car_corners(cx1, cy1, h1, dims1[0], dims1[1])
     c2 = _car_corners(cx2, cy2, h2, dims2[0], dims2[1])
+
+    min_overlap = float('inf')
     for ax in axes(h1) + axes(h2):
         lo1, hi1 = project(c1, ax)
         lo2, hi2 = project(c2, ax)
-        if hi1 < lo2 or hi2 < lo1:
-            return False   # separating axis found — no overlap
-    return True            # no separating axis — rectangles overlap
+        # Overlap on this axis
+        overlap = min(hi1, hi2) - max(lo1, lo2)
+        if overlap <= 0:
+            return -1.0          # separating axis found — no collision at all
+        min_overlap = min(min_overlap, overlap)
+
+    return min_overlap           # minimum penetration depth across all axes
 
 
 class CollisionEngine:
@@ -1317,9 +1340,11 @@ class CollisionEngine:
         if dist > max(dims_a[0], dims_b[0]) + 10: return None   # definitely not touching
         key = frozenset([a, b])
         if now - self._car_cd.get(key, 0) < CAR_COLLISION_COOLDOWN: return None
-        # Full OBB overlap test using actual car rectangles (per-car dims)
+        # Full OBB penetration test — only fires if overlap > CAR_COLLISION_MIN_OVERLAP_CM.
+        # This eliminates false collisions from UWB positioning noise (±5cm).
         ha = self._heading.get(a, 0); hb = self._heading.get(b, 0)
-        if not _obb_overlap(pa[0], pa[1], ha, pb[0], pb[1], hb, dims_a, dims_b): return None
+        penetration = _obb_penetration(pa[0], pa[1], ha, pb[0], pb[1], hb, dims_a, dims_b)
+        if penetration < CAR_COLLISION_MIN_OVERLAP_CM: return None
         self._car_cd[key] = now
 
         # ── Aggressor determination ─────────────────────────────────────
@@ -1343,10 +1368,12 @@ class CollisionEngine:
         an = self._names.get(atk, f"Car{atk}"); vn = self._names.get(vic, f"Car{vic}")
         if PRINT_COLLISION_EVENTS:
             tag = " [REVERSE]" if self._reversing.get(atk, False) else ""
-            print(f"💥 CAR | {an}→{vn} dist={dist:.1f}cm{tag}  "
+            print(f"💥 CAR | {an}→{vn} dist={dist:.1f}cm overlap={penetration:.1f}cm{tag}  "
                   f"atk+{CAR_COLLISION_ATTACKER_PENALTY}s / vic-{CAR_COLLISION_VICTIM_BONUS}s")
         return dict(type='car', attacker=atk, victim=vic,
                     attacker_name=an, victim_name=vn, dist=round(dist, 3),
+                    overlap_cm=round(penetration, 1),
+                    severity='heavy' if penetration > 15 else 'light',
                     lap=self._laps.get(atk, 0), time=now)
 
     def _wall(self, cid, x, y, lap, now):
