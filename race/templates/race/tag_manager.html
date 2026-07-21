@@ -395,11 +395,86 @@
     .cv-wrap {
       flex: 1;
       display: flex;
-      align-items: flex-start;
-      justify-content: center;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
       padding: 16px;
       min-width: 0;
-      padding-top: 20px;
+      padding-top: 16px;
+      position: relative;
+    }
+
+    .map-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      width: 100%;
+      max-width: 1400px;
+      margin-bottom: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 14px;
+      flex-shrink: 0;
+    }
+
+    .map-tb-grp {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .map-tb-lbl {
+      font-size: .68rem;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+
+    .map-tb-btn {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 4px;
+      padding: 3px 10px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: .75rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all .15s;
+    }
+
+    .map-tb-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: rgba(0, 212, 255, .1);
+    }
+
+    .map-tb-val {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: .75rem;
+      color: var(--accent);
+      font-weight: 600;
+      min-width: 42px;
+    }
+
+    .map-tb-select {
+      padding: 3px 8px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Rajdhani', sans-serif;
+      font-size: .8rem;
+      font-weight: 600;
+      outline: none;
+      cursor: pointer;
+    }
+
+    .map-tb-select:focus {
+      border-color: var(--accent);
     }
 
     canvas {
@@ -407,7 +482,9 @@
       border: 1px solid var(--border);
       background: var(--bg);
       max-width: 100%;
-      max-height: 100%
+      max-height: calc(100vh - 160px);
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+      cursor: default;
     }
 
     .side {
@@ -1320,7 +1397,27 @@
   </div>
 
   <div class="main">
-    <div class="cv-wrap"><canvas id="c" width="860" height="640"></canvas></div>
+    <div class="cv-wrap">
+      <div class="map-toolbar">
+        <div class="map-tb-grp">
+          <span class="map-tb-lbl">Map Zoom</span>
+          <button class="map-tb-btn" onclick="zoomMap(0.15)">＋</button>
+          <button class="map-tb-btn" onclick="zoomMap(-0.15)">－</button>
+          <button class="map-tb-btn" onclick="resetMapTransform()">RESET</button>
+          <span id="mapZoomVal" class="map-tb-val">100%</span>
+        </div>
+        <div class="map-tb-grp">
+          <span class="map-tb-lbl">Car Size</span>
+          <select id="carVisSel" class="map-tb-select" onchange="changeCarVisScale(this.value)">
+            <option value="1.0">1.0x (Real)</option>
+            <option value="1.5" selected>1.5x (Normal)</option>
+            <option value="2.0">2.0x (Large)</option>
+            <option value="3.0">3.0x (X-Large)</option>
+          </select>
+        </div>
+      </div>
+      <canvas id="c" width="1400" height="1000"></canvas>
+    </div>
 
     <div class="side">
       <div class="side-hdr">
@@ -1411,7 +1508,9 @@
     };
 
     const CHECKPOINTS_REQUIRED = 5;
-    const CAR_SIZE_CM = 40;   // square car — matches ws_bridge.py 40×40 cm
+    const CAR_LENGTH_DEFAULT = 20;  // default car length in cm
+    const CAR_WIDTH_DEFAULT = 7;   // default car width in cm
+    const CAR_SIZE_CM = 20;
 
     const ANC = [
       { x: 0, y: 0 },
@@ -1486,7 +1585,13 @@
     let players = [], tagData = {}, reassignMode = false, liveLeaderboard = [], packetsThisSec = 0, totalPackets = 0;
     // carDims[gp_id] = { length, width } in cm — per-car collision size, editable when assigning a tag.
     let carDims = {};
-    const CAR_DIM_DEFAULT = CAR_SIZE_CM; // default length/width shown when a player has no custom size yet
+    const CAR_DIM_DEFAULT = { length: CAR_LENGTH_DEFAULT, width: CAR_WIDTH_DEFAULT }; // default length 20cm, width 7cm
+    let mapZoom = 1.0;
+    let mapPanX = 0;
+    let mapPanY = 0;
+    let carVisScale = 1.5; // default 1.5x visual scale multiplier for 20x7cm cars
+    let isDraggingMap = false;
+    let dragStartX = 0, dragStartY = 0;
     let cpTouches = {};      // sidebar panel: all-time history per CP
     let cpActiveLap = {};    // canvas dots: only cars active THIS lap per CP, resets per car on lap done
 
@@ -1589,13 +1694,69 @@
         ys.push(liveTrack.start_finish.y2);
       }
       const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
-      const w = maxX - minX, h = maxY - minY, pad = 60;
-      cScale = Math.min((canvas.width - pad * 2) / (w || 1), (canvas.height - pad * 2) / (h || 1)) * 0.95;
+      const w = maxX - minX, h = maxY - minY, pad = 25;
+      cScale = Math.min((canvas.width - pad * 2) / (w || 1), (canvas.height - pad * 2) / (h || 1)) * 0.98;
       cOffX = (canvas.width - w * cScale) / 2 - minX * cScale;
       cOffY = (canvas.height - h * cScale) / 2 - minY * cScale;
     }
     calcLayout();
-    function tp(cx, cy) { return { px: cOffX + cx * cScale, py: canvas.height - cOffY - cy * cScale }; }
+
+    function zoomMap(delta) {
+      mapZoom = Math.max(0.5, Math.min(4.0, mapZoom + delta));
+      const el = document.getElementById('mapZoomVal');
+      if (el) el.textContent = Math.round(mapZoom * 100) + '%';
+    }
+
+    function resetMapTransform() {
+      mapZoom = 1.0;
+      mapPanX = 0;
+      mapPanY = 0;
+      const el = document.getElementById('mapZoomVal');
+      if (el) el.textContent = '100%';
+    }
+
+    function changeCarVisScale(val) {
+      carVisScale = parseFloat(val) || 1.5;
+    }
+
+    canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const delta = e.deltaY < 0 ? 0.12 : -0.12;
+      zoomMap(delta);
+    }, { passive: false });
+
+    canvas.addEventListener('mousedown', (e) => {
+      if (e.button === 0) {
+        isDraggingMap = true;
+        dragStartX = e.clientX - mapPanX * mapZoom;
+        dragStartY = e.clientY - mapPanY * mapZoom;
+        canvas.style.cursor = 'grabbing';
+      }
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (isDraggingMap) {
+        mapPanX = (e.clientX - dragStartX) / mapZoom;
+        mapPanY = (e.clientY - dragStartY) / mapZoom;
+      }
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (isDraggingMap) {
+        isDraggingMap = false;
+        canvas.style.cursor = 'default';
+      }
+    });
+
+    function tp(cx, cy) {
+      const basePx = cOffX + cx * cScale;
+      const basePy = canvas.height - cOffY - cy * cScale;
+      const cxMid = canvas.width / 2;
+      const cyMid = canvas.height / 2;
+      const px = cxMid + (basePx - cxMid + mapPanX) * mapZoom;
+      const py = cyMid + (basePy - cyMid + mapPanY) * mapZoom;
+      return { px, py };
+    }
 
     // ── Track draw helpers ───────────────────────────────────────────────
     function offsetPath(pts, halfW, side) {
@@ -1811,9 +1972,11 @@
         // Look up the carDims assigned to this player.  Falls back to the
         // same CAR_DIM_DEFAULT used by the bridge so the two always agree.
         const gpId = player ? player.gp_id : null;
-        const dim = gpId != null ? getCarDim(gpId) : { length: CAR_DIM_DEFAULT, width: CAR_DIM_DEFAULT };
-        const halfL = (dim.length * cScale) / 2;   // half-length in pixels (along heading)
-        const halfW = (dim.width * cScale) / 2;   // half-width  in pixels (perpendicular)
+        const dim = gpId != null ? getCarDim(gpId) : CAR_DIM_DEFAULT;
+        const effScale = cScale * mapZoom;
+        const renderScale = effScale * carVisScale;
+        const halfL = Math.max((dim.length * renderScale) / 2, 12);   // half-length in pixels (along heading)
+        const halfW = Math.max((dim.width * renderScale) / 2, 5);    // half-width  in pixels (perpendicular)
 
         ctx.save();
         ctx.translate(p.px, p.py);
@@ -2425,7 +2588,7 @@
     // RACE ACTIONS
     // ═══════════════════════════════════════════════════════════
     function buildTagMap() { const map = {}; players.forEach(p => { if (p.tag_id !== null && p.tag_id !== undefined) map[String(p.tag_id)] = p.gp_id; }); return map; }
-    function getCarDim(gpId) { return carDims[gpId] || { length: CAR_DIM_DEFAULT, width: CAR_DIM_DEFAULT }; }
+    function getCarDim(gpId) { return carDims[gpId] || { length: CAR_LENGTH_DEFAULT, width: CAR_WIDTH_DEFAULT }; }
     // Bridge keys collision dims by tag_id (not gp_id) — only players with a tag assigned are included.
     function buildCarDimsMap() {
       const map = {};
@@ -2527,7 +2690,7 @@
         const gpId = inp.dataset.gp, axis = inp.dataset.axis;
         const val = parseFloat(inp.value);
         const cur = getCarDim(gpId);
-        carDims[gpId] = { ...cur, [axis]: (val > 0 ? val : CAR_DIM_DEFAULT) };
+        carDims[gpId] = { ...cur, [axis]: (val > 0 ? val : (axis === 'length' ? CAR_LENGTH_DEFAULT : CAR_WIDTH_DEFAULT)) };
       });
 
       // Save all tag inputs
@@ -2656,7 +2819,7 @@
       const gpId = input.dataset.gp, axis = input.dataset.axis;
       const val = parseFloat(input.value);
       const cur = getCarDim(gpId);
-      const next = { ...cur, [axis]: (val > 0 ? val : CAR_DIM_DEFAULT) };
+      const next = { ...cur, [axis]: (val > 0 ? val : (axis === 'length' ? CAR_LENGTH_DEFAULT : CAR_WIDTH_DEFAULT)) };
       carDims[gpId] = next;
       input.value = next[axis];
       // Push live to the bridge immediately if this player already has a tag assigned,
