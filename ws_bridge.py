@@ -1185,10 +1185,9 @@ def _car_corners(x, y, heading, length=CAR_LENGTH_CM, width=CAR_WIDTH_CM):
 
 # Minimum penetration depth (cm) required to register a car-to-car collision.
 # Two OBBs must overlap by at least this much on ALL SAT axes.
-# ─ Increase to require deeper overlap (fewer, more definite collisions)
-# ─ Decrease toward 0 to trigger on first touch
-# Rule of thumb for RC cars: 5–10cm works well with UWB noise of ±5cm
-CAR_COLLISION_MIN_OVERLAP_CM = 5.0
+# Lowered to 1.0cm so small 20x7cm cars trigger on any real contact.
+# UWB noise is handled by the cooldown + bounding-circle pre-check.
+CAR_COLLISION_MIN_OVERLAP_CM = 1.0
 
 
 def _obb_penetration(cx1, cy1, h1, cx2, cy2, h2,
@@ -1333,18 +1332,28 @@ class CollisionEngine:
         pa = self._pos.get(a); pb = self._pos.get(b)
         if not pa or not pb: return None
         dims_a = self._dims.get(a, CAR_DIMS_DEFAULT); dims_b = self._dims.get(b, CAR_DIMS_DEFAULT)
-        # Quick centre-to-centre pre-check (cheap reject before OBB test).
-        # Uses each car's own configured length so bigger/smaller cars get a
-        # correctly sized collision radius instead of the old fixed value.
         dist = math.hypot(pa[0]-pb[0], pa[1]-pb[1])
-        if dist > max(dims_a[0], dims_b[0]) + 10: return None   # definitely not touching
+        # Bounding-circle pre-check: half-diagonal of each car's bounding box.
+        # This is the tightest possible pre-reject — if centres are farther apart
+        # than the sum of half-diagonals the OBBs cannot possibly be touching.
+        # For 20x7 cars: half-diag = sqrt(10²+3.5²)/2 ≈ 10.6cm, sum ≈ 21cm.
+        rad_a = math.hypot(dims_a[0], dims_a[1]) / 2
+        rad_b = math.hypot(dims_b[0], dims_b[1]) / 2
+        if dist > rad_a + rad_b + 5:   # +5cm generous fudge for UWB noise
+            return None
         key = frozenset([a, b])
         if now - self._car_cd.get(key, 0) < CAR_COLLISION_COOLDOWN: return None
-        # Full OBB penetration test — only fires if overlap > CAR_COLLISION_MIN_OVERLAP_CM.
-        # This eliminates false collisions from UWB positioning noise (±5cm).
+        # Full OBB penetration test via Separating Axis Theorem.
         ha = self._heading.get(a, 0); hb = self._heading.get(b, 0)
         penetration = _obb_penetration(pa[0], pa[1], ha, pb[0], pb[1], hb, dims_a, dims_b)
-        if penetration < CAR_COLLISION_MIN_OVERLAP_CM: return None
+        # Radius-based fallback: if heading is unknown (both zero) the OBB may
+        # produce false negatives.  If centre-to-centre <= sum of half-diagonals
+        # treat it as a confirmed contact regardless of the OBB result.
+        if penetration < CAR_COLLISION_MIN_OVERLAP_CM:
+            if dist <= rad_a + rad_b:
+                penetration = (rad_a + rad_b) - dist   # estimated overlap
+            else:
+                return None
         self._car_cd[key] = now
 
         # ── Aggressor determination ─────────────────────────────────────
