@@ -2733,7 +2733,17 @@
       cpTouches = {}; renderCpPanel(); resetAllEma();
       await pushScreen('counter');
       sendWS({ type: 'admin_start', group_id: parseInt(currentGroupId), tournament_id: currentTournamentId, total_laps: currentTotalLaps, tag_map: buildTagMap(), car_dims: buildCarDimsMap(), race_config: raceConfig, track_csv: currentTrackCSV, checkpoints_required: CHECKPOINTS_REQUIRED });
-      Object.keys(tagData).forEach(tid => { tagData[tid].trail = []; tagData[tid].lapInfo = null; tagData[tid].lapStartTime = null; });
+      // Reset ALL per-tag race data so sidebar shows 0 immediately after restart
+      Object.keys(tagData).forEach(tid => {
+        tagData[tid].trail        = [];
+        tagData[tid].lapInfo      = null;
+        tagData[tid].lapStartTime = null;
+        tagData[tid].wallHits     = 0;
+        tagData[tid].carHits      = 0;
+      });
+      liveLeaderboard = [];
+      refreshCollisionStats();   // redraws cs_wall / cs_car / cs_pen / cs_bon → all 0
+      renderLeaderboard();       // clears leaderboard table
       currentGroupStatus = 'live'; reassignMode = false; setBadge('live');
       appendFeed(['▶ Race restarted — tags reassigned, track reloaded, LIVE']);
       renderPlayers();
