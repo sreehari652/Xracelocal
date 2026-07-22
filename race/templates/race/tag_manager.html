@@ -140,6 +140,30 @@
       background: #e6c200
     }
 
+    .btn-draw {
+      background: rgba(255, 255, 255, .08);
+      color: #ccc;
+      border: 1px solid rgba(255, 255, 255, .18);
+      transition: background .15s, color .15s, border-color .15s;
+    }
+
+    .btn-draw:hover {
+      background: rgba(255, 255, 255, .14);
+    }
+
+    .btn-draw.active {
+      background: var(--yellow);
+      color: #000;
+      border-color: var(--yellow);
+      box-shadow: 0 0 10px rgba(255, 214, 0, .5);
+      animation: drawPulse 1.4s ease-in-out infinite;
+    }
+
+    @keyframes drawPulse {
+      0%, 100% { box-shadow: 0 0 6px rgba(255, 214, 0, .35); }
+      50%      { box-shadow: 0 0 14px rgba(255, 214, 0, .75); }
+    }
+
     .btn-raw {
       background: rgba(0, 212, 255, .12);
       color: var(--accent);
@@ -1220,6 +1244,7 @@
       <option value="high" selected>Smoothing: High (Lag ~150ms)</option>
       <option value="ultra">Smoothing: Ultra (Lag ~300ms)</option>
     </select>
+    <button class="btn btn-draw" id="btnDrawMode" onclick="toggleDrawMode()" title="Disables ZUPT freeze so the tag never locks onto a wrong stationary position — use while walking the tag around to chalk-mark the track.">✏ Draw Mode: OFF</button>
     <span class="ws-pill ws-fail" id="wsPill">● WS</span>
   </div>
 
@@ -1508,7 +1533,7 @@
     };
 
     const CHECKPOINTS_REQUIRED = 5;
-    const CAR_LENGTH_DEFAULT = 20;  // default car length in cm
+    const CAR_LENGTH_DEFAULT = 45;  // default car length in cm
     const CAR_WIDTH_DEFAULT = 10;   // default car width in cm
     const CAR_SIZE_CM = 20;
 
@@ -1581,7 +1606,7 @@
     let currentGroupId = null, currentGroupStatus = '', currentTotalLaps = 10, currentTrackCSV = '';
     let currentTournamentId = null;  // resolved from tournament slug, sent with admin_start
     let raceConfig = { total_laps: 10, collision_absorbing_time: null, collision_creating_time: null, object_collision_time: null };
-    let liveTrack = { center: [], inner: [], outer: [], checkpoints: [], start_finish: { x: 490, y1: 300, y2: 340, dir: 'left_to_right' } };
+    let liveTrack = { center: [], inner: [], outer: [], checkpoints: [], start_finish: { x1: 460, y1: 300, x2: 460, y2: 340, dir: 'left_to_right' } };
     let players = [], tagData = {}, reassignMode = false, liveLeaderboard = [], packetsThisSec = 0, totalPackets = 0;
     // carDims[gp_id] = { length, width } in cm — per-car collision size, editable when assigning a tag.
     let carDims = {};
@@ -1689,9 +1714,8 @@
         });
       }
       if (liveTrack.start_finish) {
-        xs.push(liveTrack.start_finish.x);
-        ys.push(liveTrack.start_finish.y1);
-        ys.push(liveTrack.start_finish.y2);
+        xs.push(liveTrack.start_finish.x1, liveTrack.start_finish.x2);
+        ys.push(liveTrack.start_finish.y1, liveTrack.start_finish.y2);
       }
       const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
       const w = maxX - minX, h = maxY - minY, pad = 25;
@@ -1849,21 +1873,30 @@
         drawCenterLine(ctrPx); drawArrows(ctrPx);
 
         const sf = liveTrack.start_finish;
-        const sfP1 = tp(sf.x, sf.y1), sfP2 = tp(sf.x, sf.y2);
+        const sfP1 = tp(sf.x1, sf.y1), sfP2 = tp(sf.x2, sf.y2);
         const sfDx = sfP2.px - sfP1.px, sfDy = sfP2.py - sfP1.py, sfLen = Math.hypot(sfDx, sfDy) || 1;
         const sfMx = (sfP1.px + sfP2.px) / 2, sfMy = (sfP1.py + sfP2.py) / 2;
         const tgX = sfDx / sfLen, tgY = sfDy / sfLen, nxSf = -sfDy / sfLen, nySf = sfDx / sfLen;
-        const sqS = 8, sqN = 5;
+        // Checker squares scale to the actual S/F span (sfLen), which the
+        // bridge now stretches to the FULL width of the track at this point
+        // (inner edge to outer edge) — so the pattern always fills the
+        // track from curb to curb instead of a small fixed-size patch.
+        const sqS = 8, sqN = Math.max(3, Math.round(sfLen / sqS));
         for (let row = 0; row < 3; row++) for (let col = 0; col < sqN; col++) {
           const t2 = (col - sqN / 2) * sqS, r2 = (row - 1) * sqS;
-          ctx.save(); ctx.translate(sfMx + nxSf * t2 + tgX * r2, sfMy + nySf * t2 + tgY * r2); ctx.rotate(Math.atan2(tgY, tgX));
+          ctx.save(); ctx.translate(sfMx + tgX * t2 + nxSf * r2, sfMy + tgY * t2 + nySf * r2); ctx.rotate(Math.atan2(tgY, tgX));
           ctx.fillStyle = (row + col) % 2 === 0 ? '#ffffff' : '#111111'; ctx.fillRect(-sqS / 2, -sqS / 2, sqS, sqS); ctx.restore();
         }
         ctx.shadowColor = 'rgba(255,215,0,0.9)'; ctx.shadowBlur = 8; ctx.fillStyle = '#ffd700';
         ctx.font = 'bold 11px JetBrains Mono,monospace'; ctx.textAlign = 'center';
         ctx.fillText('S/F', sfMx + nxSf * 22, sfMy + nySf * 22); ctx.shadowBlur = 0;
-        const ao = sf.dir === 'left_to_right' ? 0.20 : -0.20;
-        const af = tp(sf.x - ao * 0.6, (sf.y1 + sf.y2) / 2), at = tp(sf.x + ao, (sf.y1 + sf.y2) / 2);
+        // Arrow points along the segment's true perpendicular (the actual
+        // direction of travel through the gate) rather than assuming
+        // travel is along world-X — that assumption broke for S/F segments
+        // that run mostly horizontally or diagonally.
+        const dsign = sf.dir === 'left_to_right' ? 1 : -1;
+        const af = { px: sfMx - nxSf * 16 * dsign, py: sfMy - nySf * 16 * dsign };
+        const at = { px: sfMx + nxSf * 26 * dsign, py: sfMy + nySf * 26 * dsign };
         ctx.save(); ctx.strokeStyle = 'rgba(255,215,0,0.8)'; ctx.lineWidth = 2; ctx.setLineDash([4, 3]);
         ctx.beginPath(); ctx.moveTo(af.px, af.py); ctx.lineTo(at.px, at.py); ctx.stroke(); ctx.setLineDash([]);
         const adx = at.px - af.px, ady = at.py - af.py, al = Math.hypot(adx, ady) || 1, anx = adx / al, any = ady / al, ahs = 7;
@@ -1965,8 +1998,16 @@
         const dc = oob ? '#ff8800' : color;
 
         // ── Heading from IMU gyro (frozen when static, live when moving) ──
+        // NOTE: heading from the backend/firmware uses standard math
+        // convention (y-up, counter-clockwise-positive) — see
+        // ws_bridge.py _car_corners(). tp() above flips Y (canvas.height -
+        // cy*scale) to map that same y-up track space onto y-down canvas
+        // pixels for POSITION. Rotation must be flipped the same way, or
+        // the car appears to turn the opposite direction from its actual
+        // movement. Negating here keeps rotation consistent with the
+        // position flip.
         const headingDeg = (d && d.heading != null) ? d.heading : 0;
-        const heading = headingDeg * Math.PI / 180;
+        const heading = -headingDeg * Math.PI / 180;
 
         // ── Per-car collision rectangle — MUST match backend OBB exactly ─
         // Look up the carDims assigned to this player.  Falls back to the
@@ -2116,6 +2157,7 @@
     // WEBSOCKET
     // ═══════════════════════════════════════════════════════════
     let ws, reconnTimer;
+    let drawMode = false; // mirrors server's ZUPT-bypass state; synced via WS messages
     function connectWS() {
       if (ws) { try { ws.close(); } catch (e) { } }
       ws = new WebSocket(WS_URL);
@@ -2133,6 +2175,7 @@
               serverFilterInfo.R = flt.l3_kalman_R;
               updateEmaDebugText();
             }
+            if (msg.draw_mode != null) setDrawModeUI(msg.draw_mode);
             return;
           }
           if (msg.track) applyLiveTrack(msg.track);
@@ -2148,6 +2191,7 @@
             refreshDebugBar();
           }
           if (msg.type === 'state_update') {
+            if (msg.draw_mode != null) setDrawModeUI(msg.draw_mode);
             document.getElementById('sLaps').textContent = msg.total_laps ?? '—';
             document.getElementById('sGroup').textContent = msg.group_id ?? '—';
             if (msg.feed?.length) appendFeed(msg.feed);
@@ -2324,9 +2368,41 @@
             if (msg.event === 'race_reset') {
               cpTouches = {}; cpActiveLap = {}; renderCpPanel(); resetAllEma();
             }
+            if (msg.event === 'draw_mode') setDrawModeUI(msg.draw_mode);
             appendFeed([`[${msg.event}] ${msg.message}`]); return;
           }
         } catch (err) { console.error('[WS] parse error:', err); }
+      };
+    }
+
+    function _nearestPt(pts, x, y) {
+      if (!pts || !pts.length) return null;
+      let best = null, bestD2 = Infinity;
+      for (const p of pts) {
+        const px = p[0], py = p[1];
+        const d2 = (px - x) * (px - x) + (py - y) * (py - y);
+        if (d2 < bestD2) { bestD2 = d2; best = [px, py]; }
+      }
+      return best;
+    }
+
+    // Mirrors the bridge's _stretch_sf_to_track_width: widens the S/F
+    // preview line to the full inner→outer track width at that point,
+    // so the local preview matches what the server will actually use.
+    // The inner/outer points become the two endpoints AS-IS (not collapsed
+    // to an avg-X / min-max-Y box) — that collapsing only worked when the
+    // track ran vertically at the S/F point; for a mostly-horizontal or
+    // diagonal S/F segment it threw away most of the real width.
+    function stretchSfToTrackWidth(sf, inner, outer) {
+      if (!sf) return sf;
+      const mx = (sf.x1 + sf.x2) / 2, my = (sf.y1 + sf.y2) / 2;
+      const innerPt = _nearestPt(inner, mx, my);
+      const outerPt = _nearestPt(outer, mx, my);
+      if (!innerPt || !outerPt) return sf;
+      return {
+        x1: innerPt[0], y1: innerPt[1],
+        x2: outerPt[0], y2: outerPt[1],
+        dir: sf.dir
       };
     }
 
@@ -2340,12 +2416,12 @@
           if (kind === 'CENTER' && parts.length >= 3) center.push([parseFloat(parts[1]) * 100, parseFloat(parts[2]) * 100]);
           else if (kind === 'INNER' && parts.length >= 3) inner.push([parseFloat(parts[1]) * 100, parseFloat(parts[2]) * 100]);
           else if (kind === 'OUTER' && parts.length >= 3) outer.push([parseFloat(parts[1]) * 100, parseFloat(parts[2]) * 100]);
-          else if (kind === 'START_FINISH' && parts.length >= 5) { const x1 = parseFloat(parts[1]) * 100, y1 = parseFloat(parts[2]) * 100, x2 = parseFloat(parts[3]) * 100, y2 = parseFloat(parts[4]) * 100; sf = { x: (x1 + x2) / 2, y1: Math.min(y1, y2), y2: Math.max(y1, y2), dir: parts.length >= 6 ? parts[5].toLowerCase() : 'left_to_right' }; }
+          else if (kind === 'START_FINISH' && parts.length >= 5) { const x1 = parseFloat(parts[1]) * 100, y1 = parseFloat(parts[2]) * 100, x2 = parseFloat(parts[3]) * 100, y2 = parseFloat(parts[4]) * 100; sf = { x1, y1, x2, y2, dir: parts.length >= 6 ? parts[5].toLowerCase() : 'left_to_right' }; }
           else if (kind === 'CHECKPOINT' && parts.length >= 5) { const id = parseInt(parts[1]); cpMap[id] = { id, x: parseFloat(parts[2]) * 100, y: parseFloat(parts[3]) * 100, r: parseFloat(parts[4]) * 100 }; }
         } catch (e) { }
       }
       if (center.length > 2) liveTrack.center = center; if (inner.length > 2) liveTrack.inner = inner; if (outer.length > 2) liveTrack.outer = outer;
-      if (sf) liveTrack.start_finish = sf;
+      if (sf) liveTrack.start_finish = stretchSfToTrackWidth(sf, inner, outer);
       const ids = Object.keys(cpMap).map(Number).sort((a, b) => a - b); if (ids.length) liveTrack.checkpoints = ids.map(i => cpMap[i]);
       refreshDebugBar();
       calcLayout();
@@ -2366,8 +2442,9 @@
       }
       if (td.start_finish) {
         liveTrack.start_finish = {
-          x: td.start_finish.x,
+          x1: td.start_finish.x1,
           y1: td.start_finish.y1,
+          x2: td.start_finish.x2,
           y2: td.start_finish.y2,
           dir: td.start_finish.dir
         };
@@ -2409,6 +2486,20 @@
     function getCSRF() { const m = document.cookie.match(/csrftoken=([^;]+)/); return m ? m[1] : ''; }
     async function apiPatch(url, body) { const r = await fetch(url, { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRF() }, credentials: 'include', body: JSON.stringify(body) }); return r.json(); }
     function sendWS(payload) { if (ws && ws.readyState === WebSocket.OPEN) { ws.send(JSON.stringify(payload)); console.log('[WS→]', payload.type); } else console.warn('[WS] not connected:', payload.type); }
+
+    function toggleDrawMode() {
+      sendWS({ type: 'set_draw_mode', enabled: !drawMode });
+      // UI updates from the server's confirming admin_event, not optimistically —
+      // so the button always reflects what the bridge is actually doing.
+    }
+
+    function setDrawModeUI(enabled) {
+      drawMode = !!enabled;
+      const btn = document.getElementById('btnDrawMode');
+      if (!btn) return;
+      btn.textContent = drawMode ? '✏ Draw Mode: ON (no freeze)' : '✏ Draw Mode: OFF';
+      btn.classList.toggle('active', drawMode);
+    }
     function sendWallCmd(screen, extraData = {}) { sendWS({ type: 'live_wall_command', screen, ...extraData }); }
 
     // ═══════════════════════════════════════════════════════════

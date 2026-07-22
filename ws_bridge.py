@@ -208,21 +208,33 @@ CAR_COLLISION_ATTACKER_PENALTY = CAR_COLLISION_ATTACKER_PENALTY_DEFAULT
 CAR_COLLISION_VICTIM_BONUS     = CAR_COLLISION_VICTIM_BONUS_DEFAULT
 
 # ── Default start/finish in CENTIMETRES (overridden by CSV) ────────────────
-START_LINE_X         = 490.00
+# The S/F gate is stored as a GENERAL two-endpoint segment — (X1,Y1) to
+# (X2,Y2) — not a fixed-X / Y-range pair. A fixed-X model only works when
+# the track happens to run vertically at that point; on tracks where the
+# inner→outer boundary at the S/F point is mostly horizontal or diagonal
+# (dx bigger than dy), collapsing it to "one X, a Y-range" throws away
+# almost all of the real width. Two endpoints work for any orientation.
+START_LINE_X1        = 460.00
 START_LINE_Y1        = 300.00
+START_LINE_X2        = 460.00
 START_LINE_Y2        = 340.00
 LINE_CROSS_TOLERANCE = 8.00
 LINE_Y_TOLERANCE     = 30.00
 SF_CROSSING_DIR      = 'left_to_right'
-# Proximity-based S/F gate: centre point + radius (cm). Any tag within this
-# radius of the S/F centre counts as crossing — direction-agnostic, so the
-# CSV's two endpoints no longer need to form a strict vertical line.
-SF_GATE_CX     = (START_LINE_X)
-SF_GATE_CY     = (START_LINE_Y1 + START_LINE_Y2) / 2
-SF_GATE_RADIUS = 90.00   # cm — generous "anywhere near the start" zone.
-                          # Must exceed the track's half-width at the S/F
-                          # point, or a car hugging either wall edge will
-                          # sit right at/outside the radius boundary.
+# Full-width S/F gate: a band running the entire length of the segment
+# (X1,Y1)-(X2,Y2) — stretched at load-time to reach from the inner boundary
+# to the outer boundary at the S/F point, see _stretch_sf_to_track_width —
+# and SF_GATE_DEPTH_X on either side of it, measured perpendicular to the
+# segment (i.e. along the direction of travel through the gate, whatever
+# that direction is). Any tag anywhere inside that band counts as crossing —
+# i.e. the whole width of the track at the start/finish line is "live",
+# not just a narrow strip or a small circle near the centre.
+SF_GATE_DEPTH_X     = 35.00   # cm — thickness of the gate along the direction
+                               # of travel (perpendicular to the S/F segment).
+SF_GATE_EDGE_MARGIN = 15.00   # cm — extra slack past each endpoint of the
+                               # segment so a car hugging the curb still
+                               # triggers, even if the nearest-boundary-point
+                               # lookup is a little off.
 
 # Minimum effective checkpoint radius (cm). Any checkpoint defined in the
 # CSV with a smaller radius is still treated as at least this generous, so
@@ -251,8 +263,8 @@ CAR_COLLISION_COOLDOWN     = 1.0
 # been assigned its own length/width (see CollisionEngine.set_car_dims /
 # CAR_DIMS_DEFAULT below) — per-car dims from the tag-assignment UI take
 # priority and are used to compute each car's own collision rectangle.
-CAR_LENGTH_CM = 20.0   # default car length in cm (20cm)
-CAR_WIDTH_CM  = 7.0    # default car width in cm (7cm)
+CAR_LENGTH_CM = 45.0   # default car length in cm (20cm)
+CAR_WIDTH_CM  = 10.0    # default car width in cm (7cm)
 CAR_DIMS_DEFAULT = (CAR_LENGTH_CM, CAR_WIDTH_CM)
 SPEED_DIFF_THRESHOLD       = 10.0
 WALL_TOLERANCE_M           = 5.0
@@ -474,21 +486,69 @@ def parse_at_range(raw_bytes: bytes):
 # TRACK CSV PARSER
 # ═══════════════════════════════════════════════════════════════════════
 
+def _nearest_point(points: list, x: float, y: float):
+    """Nearest (px, py) in a polyline list to (x, y). Returns None if points is empty."""
+    if not points:
+        return None
+    best, best_d2 = None, float('inf')
+    for px, py in points:
+        d2 = (px - x) ** 2 + (py - y) ** 2
+        if d2 < best_d2:
+            best_d2, best = d2, (px, py)
+    return best
+
+
+def _stretch_sf_to_track_width(td: 'TrackData'):
+    """Widen the S/F gate so it spans the FULL width of the track at that
+    point — from the inner boundary to the outer boundary — instead of
+    whatever narrow span happened to be given for the two S/F endpoints.
+    This is what makes "the car can cross anywhere across the track" work:
+    the gate band is only as wide as what we tell it the track is, so if
+    the raw CSV endpoints are narrower than the physical track, cars near
+    either edge would never trigger a start/finish crossing.
+
+    The new inner/outer points become the gate's two endpoints DIRECTLY
+    (no collapsing to "one X, a Y-range"). That matters whenever the local
+    inner→outer direction isn't purely vertical — e.g. a track that runs
+    mostly left-right at the S/F point has an inner/outer pair that differs
+    mostly in X, not Y. The old code always kept the average X and only the
+    Y-span, which on a mostly-horizontal segment threw away almost the
+    entire real width (e.g. 120cm of true width collapsed to ~34cm).
+    Storing both endpoints as-is works for any orientation.
+
+    Requires both INNER and OUTER polylines to be loaded; if either is
+    missing (e.g. a CENTER-only track), the original CSV/default S/F span
+    is left untouched since there's no boundary geometry to stretch to.
+    """
+    mx = (td.sf_x1 + td.sf_x2) / 2.0
+    my = (td.sf_y1 + td.sf_y2) / 2.0
+    inner_pt = _nearest_point(td.inner, mx, my)
+    outer_pt = _nearest_point(td.outer, mx, my)
+    if inner_pt is None or outer_pt is None:
+        return
+    ix, iy = inner_pt
+    ox, oy = outer_pt
+    td.sf_x1, td.sf_y1 = ix, iy
+    td.sf_x2, td.sf_y2 = ox, oy
+    width = math.hypot(ox - ix, oy - iy)
+    print(f"[TRACK] S/F stretched to full track width: "
+          f"inner=({ix:.1f},{iy:.1f}) outer=({ox:.1f},{oy:.1f}) "
+          f"→ width={width:.1f}cm")
+
+
 class TrackData:
     def __init__(self):
         self.center:      list = []
         self.inner:       list = []
         self.outer:       list = []
         self.checkpoints: list = []
-        self.sf_x:   float = START_LINE_X
+        # S/F gate stored as a general two-endpoint segment (X1,Y1)-(X2,Y2),
+        # not a fixed-X / Y-range pair — see START_LINE_* comment above.
+        self.sf_x1:  float = START_LINE_X1
         self.sf_y1:  float = START_LINE_Y1
+        self.sf_x2:  float = START_LINE_X2
         self.sf_y2:  float = START_LINE_Y2
         self.sf_dir: str   = SF_CROSSING_DIR
-        # True midpoint of the two raw S/F endpoints, regardless of whether
-        # they form a vertical, horizontal, or diagonal segment. Used for
-        # proximity-based gate detection (works for ANY line orientation).
-        self.sf_cx:  float = SF_GATE_CX
-        self.sf_cy:  float = SF_GATE_CY
 
     def is_loaded(self) -> bool:
         return bool(self.center)
@@ -503,7 +563,8 @@ class TrackData:
                 for i, cp in enumerate(self.checkpoints)
             ],
             start_finish=dict(
-                x=self.sf_x, y1=self.sf_y1, y2=self.sf_y2, dir=self.sf_dir),
+                x1=self.sf_x1, y1=self.sf_y1,
+                x2=self.sf_x2, y2=self.sf_y2, dir=self.sf_dir),
         )
 
 
@@ -533,16 +594,16 @@ def parse_track_csv(csv_text: str) -> TrackData:
             elif kind == 'OUTER' and len(parts) >= 3:
                 td.outer.append((float(parts[1]) * M_TO_CM, float(parts[2]) * M_TO_CM))
             elif kind == 'START_FINISH' and len(parts) >= 5:
-                x1, y1_sf = float(parts[1]) * M_TO_CM, float(parts[2]) * M_TO_CM
-                x2, y2_sf = float(parts[3]) * M_TO_CM, float(parts[4]) * M_TO_CM
-                td.sf_x  = (x1 + x2) / 2
-                td.sf_y1 = min(y1_sf, y2_sf)
-                td.sf_y2 = max(y1_sf, y2_sf)
-                # True midpoint of the two raw endpoints — correct regardless
-                # of whether the segment is vertical, horizontal, or diagonal.
-                # This is what proximity-based gate detection actually uses.
-                td.sf_cx = (x1 + x2) / 2
-                td.sf_cy = (y1_sf + y2_sf) / 2
+                # Keep the two raw endpoints AS-IS (no collapsing to an
+                # avg-X / min-max-Y box) — _stretch_sf_to_track_width will
+                # replace them with the real inner/outer boundary points,
+                # and preserving the true segment here means that stretch
+                # step has a correct midpoint to search from regardless of
+                # whether this segment is vertical, horizontal, or diagonal.
+                td.sf_x1 = float(parts[1]) * M_TO_CM
+                td.sf_y1 = float(parts[2]) * M_TO_CM
+                td.sf_x2 = float(parts[3]) * M_TO_CM
+                td.sf_y2 = float(parts[4]) * M_TO_CM
                 if len(parts) >= 6:
                     td.sf_dir = parts[5].lower().strip()
             elif kind == 'CHECKPOINT' and len(parts) >= 5:
@@ -556,12 +617,14 @@ def parse_track_csv(csv_text: str) -> TrackData:
     if cp_dict:
         td.checkpoints = [cp_dict[k] for k in sorted(cp_dict.keys())]
 
+    _stretch_sf_to_track_width(td)
+
     return td
 
 
 def apply_track_data(td: TrackData):
-    global CHECKPOINTS, START_LINE_X, START_LINE_Y1, START_LINE_Y2, SF_CROSSING_DIR
-    global SF_GATE_CX, SF_GATE_CY
+    global CHECKPOINTS, START_LINE_X1, START_LINE_Y1, START_LINE_X2, START_LINE_Y2
+    global SF_CROSSING_DIR
 
     if td.checkpoints:
         CHECKPOINTS = list(td.checkpoints)
@@ -569,14 +632,16 @@ def apply_track_data(td: TrackData):
     else:
         print("[TRACK] No checkpoints in CSV — keeping previous")
 
-    START_LINE_X    = td.sf_x
+    START_LINE_X1   = td.sf_x1
     START_LINE_Y1   = td.sf_y1
+    START_LINE_X2   = td.sf_x2
     START_LINE_Y2   = td.sf_y2
     SF_CROSSING_DIR = td.sf_dir
-    SF_GATE_CX      = td.sf_cx
-    SF_GATE_CY      = td.sf_cy
-    print(f"[TRACK] S/F  x={START_LINE_X:.3f}cm  y=[{START_LINE_Y1:.3f}..{START_LINE_Y2:.3f}]cm  dir={SF_CROSSING_DIR}")
-    print(f"[TRACK] S/F gate centre = ({SF_GATE_CX:.3f}, {SF_GATE_CY:.3f})cm  radius={SF_GATE_RADIUS:.1f}cm")
+    gate_width = math.hypot(START_LINE_X2 - START_LINE_X1, START_LINE_Y2 - START_LINE_Y1)
+    print(f"[TRACK] S/F  ({START_LINE_X1:.3f},{START_LINE_Y1:.3f}) → "
+          f"({START_LINE_X2:.3f},{START_LINE_Y2:.3f})cm  dir={SF_CROSSING_DIR}")
+    print(f"[TRACK] S/F gate = full track width band  width={gate_width:.1f}cm  "
+          f"depth=±{SF_GATE_DEPTH_X:.0f}cm  edge_margin=±{SF_GATE_EDGE_MARGIN:.0f}cm")
 
     for eng in race_mgr._engines.values():
         eng.reset()
@@ -989,21 +1054,38 @@ class LapEngine:
         return sf_ev or cp_ev
 
     def _check_sf_line(self, x, y, now):
-        # Proximity-based gate: ANY tag within SF_GATE_RADIUS of the S/F
-        # centre point counts as "at the start/finish" — regardless of
-        # approach direction or how the CSV's two raw endpoints were
-        # oriented. This satisfies "pass anywhere near start".
-        dist = math.hypot(x - SF_GATE_CX, y - SF_GATE_CY)
-        currently_in = dist <= SF_GATE_RADIUS
+        # Full-width band gate: an oriented rectangle running the entire
+        # length of the S/F segment (START_LINE_X1,Y1)-(X2,Y2) — stretched
+        # to the inner/outer track boundary at load time, see
+        # _stretch_sf_to_track_width — and SF_GATE_DEPTH_X deep on either
+        # side, measured perpendicular to that segment (i.e. along the
+        # direction of travel through the gate, whatever that direction
+        # actually is). This works for a vertical, horizontal, or diagonal
+        # S/F line alike — a tag counts as at the start/finish if it's
+        # anywhere across the full width, not just near the centre.
+        seg_dx = START_LINE_X2 - START_LINE_X1
+        seg_dy = START_LINE_Y2 - START_LINE_Y1
+        seg_len = math.hypot(seg_dx, seg_dy) or 1.0
+        ux, uy = seg_dx / seg_len, seg_dy / seg_len   # unit vector along gate width
+        nx, ny = -uy, ux                                # unit normal (direction of travel)
+
+        vx, vy = x - START_LINE_X1, y - START_LINE_Y1
+        along  = vx * ux + vy * uy   # position along the width axis (0..seg_len)
+        across = vx * nx + vy * ny   # position along the travel/depth axis
+
+        in_width_band = -SF_GATE_EDGE_MARGIN <= along <= (seg_len + SF_GATE_EDGE_MARGIN)
+        in_depth_band = abs(across) <= SF_GATE_DEPTH_X
+        currently_in = in_width_band and in_depth_band
 
         if currently_in and not self._in_sf_zone:
             # Rising edge: just entered the zone — this is the crossing.
             self._in_sf_zone = True
             if now - self._last_cross < MIN_LAP_TIME:
-                print(f"[SF] {self.car_name} debounce — ignored (dist={dist:.1f}cm)")
+                print(f"[SF] {self.car_name} debounce — ignored (x={x:.1f}cm y={y:.1f}cm)")
                 return None
             print(f"[SF] ✓ {self.car_name} entered S/F zone  "
-                  f"x={x:.3f}cm y={y:.3f}cm dist={dist:.1f}cm (radius={SF_GATE_RADIUS:.0f}cm)")
+                  f"x={x:.3f}cm y={y:.3f}cm  "
+                  f"(along={along:.0f}cm of {seg_len:.0f}cm width, across={across:.0f}cm)")
             self._last_cross = now
             return self._process_crossing(now)
 
@@ -1457,6 +1539,11 @@ connected_clients = set()
 event_loop        = None
 running           = True
 race_armed        = False
+draw_mode         = False   # when True, ZUPT freeze is bypassed system-wide so the
+                             # live (Kalman-filtered, non-frozen) position is always
+                             # shown — used while walking the tag around to chalk-mark
+                             # the track, so a bad freeze-lock can't trap you on a
+                             # wrong point. Toggle back off for normal racing.
 
 stats = {'udp_total':0,'udp_valid':0,'udp_invalid':0,'ws_sent':0,'ws_clients':0,
          'tags_seen':set(),'start':datetime.now()}
@@ -1506,6 +1593,7 @@ def build_state(now):
     return json.dumps(dict(
         type="state_update", timestamp=now,
         race_active=race_mgr.race_active, race_armed=race_armed,
+        draw_mode=draw_mode,
         total_laps=TOTAL_LAPS, group_id=current_group_id,
         race_config=dict(wall_hit_penalty=WALL_HIT_PENALTY,
                          attacker_penalty=CAR_COLLISION_ATTACKER_PENALTY,
@@ -1641,7 +1729,18 @@ def udp_receiver():
             # Kalman speed in cm/s for fallback detection
             kalman_speed = tag.speed_ms   # last known speed
             imu          = imu_store.get(tid)
-            is_frozen    = tag._gate.update(imu, kalman_speed)
+
+            if draw_mode:
+                # DRAW MODE: never freeze. Keep the gate's anchor point
+                # updated so it doesn't fire a stale freeze the moment
+                # draw mode is switched back off, but always report the
+                # live filtered position — this is what lets you nudge
+                # the tag to correct a bad reading while marking chalk
+                # points, instead of being locked onto a frozen value.
+                tag._gate.freeze(rx, ry)
+                is_frozen = False
+            else:
+                is_frozen = tag._gate.update(imu, kalman_speed)
 
             if is_frozen:
                 # Store freeze position on first freeze frame
@@ -1676,7 +1775,7 @@ def udp_receiver():
                     type="tag_position", tag_id=tid,
                     x=round(rx, 4), y=round(ry, 4),
                     heading=round(tag.heading, 2),
-                    is_static=is_static,
+                    is_static=is_static, draw_mode=draw_mode,
                     range=tag.last_ranges,
                     speed=round(0.0 if is_static else tag.speed_display(), 2),
                     speed_ms=round(0.0 if is_static else tag.speed_ms, 3),
@@ -1721,7 +1820,7 @@ async def broadcast(msg):
 
 
 async def handle_client(ws):
-    global race_armed, TOTAL_LAPS, tag_to_gp, current_group_id, current_track, track
+    global race_armed, TOTAL_LAPS, tag_to_gp, current_group_id, current_track, track, draw_mode
     cid = f"{ws.remote_address[0]}:{ws.remote_address[1]}"
     print(f"[WS] Connected: {cid}")
     connected_clients.add(ws); stats['ws_clients'] += 1
@@ -1744,6 +1843,7 @@ async def handle_client(ws):
                     l3_kalman_Q=KALMAN_Q,
                 ),
                 uptime_seconds=(datetime.now()-stats['start']).total_seconds()),
+            draw_mode=draw_mode,
             anchors={str(k):{"x":v[0],"y":v[1]} for k,v in ANCHOR_POSITIONS.items()},
             track=current_track.to_dict(),
             stats=dict(packets_received=stats['udp_valid'],
@@ -1804,6 +1904,19 @@ async def handle_client(ws):
                     print(f"[CMD] Start  group={current_group_id}  laps={TOTAL_LAPS}  "
                           f"wall={WALL_HIT_PENALTY}s  atk={CAR_COLLISION_ATTACKER_PENALTY}s  "
                           f"vic_bonus={CAR_COLLISION_VICTIM_BONUS}s")
+
+                elif mt == 'set_draw_mode':
+                    draw_mode = bool(d.get('enabled', False))
+                    # Clear every tag's freeze state so toggling never leaves
+                    # a stale lock behind in either direction.
+                    for t in tags.values():
+                        t._gate.reset()
+                    await broadcast(json.dumps(dict(
+                        type="admin_event", event="draw_mode",
+                        draw_mode=draw_mode,
+                        message=f"Draw mode {'ON — ZUPT freeze disabled' if draw_mode else 'OFF — normal ZUPT active'}",
+                        timestamp=time.time())))
+                    print(f"[CMD] Draw mode = {draw_mode}")
 
                 elif mt == 'update_car_dims':
                     # Live per-car length/width update (e.g. edited from a
