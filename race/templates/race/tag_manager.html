@@ -537,41 +537,43 @@
     }
 
     .side-lbl {
-      font-size: .72rem;
+      font-size: .88rem;
       font-weight: 700;
-      letter-spacing: 2px;
+      letter-spacing: 1.5px;
       text-transform: uppercase;
-      color: var(--muted);
+      color: #ffffff;
       margin-bottom: 10px;
     }
 
     .stat-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 8px;
+      gap: 10px;
     }
 
     .sbox {
       background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 7px;
-      padding: 10px 12px;
+      border: 1px solid #2a3b50;
+      border-radius: 8px;
+      padding: 12px 14px;
+      text-align: center;
     }
 
     .sbox .v {
       font-family: 'JetBrains Mono', monospace;
-      font-size: 1.2rem;
-      font-weight: 600;
+      font-size: 1.65rem;
+      font-weight: 700;
       color: var(--accent);
-      line-height: 1;
+      line-height: 1.1;
     }
 
     .sbox .l {
-      font-size: .65rem;
-      color: var(--muted);
-      margin-top: 4px;
+      font-size: .75rem;
+      color: #cbd5e1;
+      margin-top: 6px;
       text-transform: uppercase;
-      letter-spacing: .5px;
+      letter-spacing: 1px;
+      font-weight: 700;
     }
 
     .col-stats {
@@ -582,33 +584,34 @@
 
     .col-stats-grid {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 7px;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
       margin-top: 8px;
     }
 
     .csbox {
       background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 7px;
-      padding: 8px 10px;
+      border: 1px solid #2a3b50;
+      border-radius: 8px;
+      padding: 10px 12px;
       text-align: center;
     }
 
     .csbox .cv {
       font-family: 'JetBrains Mono', monospace;
-      font-size: 1.05rem;
+      font-size: 1.45rem;
       font-weight: 700;
-      line-height: 1;
+      line-height: 1.1;
     }
 
     .csbox .cl {
-      font-size: .57rem;
-      color: var(--muted);
-      margin-top: 4px;
+      font-size: .72rem;
+      color: #cbd5e1;
+      margin-top: 5px;
       text-transform: uppercase;
-      letter-spacing: .5px;
+      letter-spacing: 1px;
       line-height: 1.2;
+      font-weight: 700;
     }
 
     .csbox.wall .cv {
@@ -633,6 +636,45 @@
 
     .csbox.best .cv {
       color: #ffd700
+    }
+
+    .col-detail-box {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid rgba(255, 255, 255, .1);
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    .col-detail-row {
+      font-size: .78rem;
+      font-weight: 700;
+      font-family: 'Rajdhani', sans-serif;
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+      color: #ffffff;
+    }
+
+    .col-detail-row.wall {
+      color: #ff6b35;
+    }
+
+    .col-detail-row.car {
+      color: #ff3b5c;
+    }
+
+    .col-detail-opp {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: .72rem;
+      background: rgba(255, 59, 92, 0.15);
+      border: 1px solid rgba(255, 59, 92, 0.35);
+      color: #ff3b5c;
+      border-radius: 4px;
+      padding: 2px 6px;
+      display: inline-block;
     }
 
     .pcard-col-row {
@@ -1446,23 +1488,15 @@
 
     <div class="side">
       <div class="side-hdr">
-        <div class="side-lbl">System</div>
+        <div class="side-lbl">System Tags</div>
         <div class="stat-grid">
           <div class="sbox">
-            <div class="v" id="sPkt">0</div>
-            <div class="l">Pkt/s</div>
-          </div>
-          <div class="sbox">
             <div class="v" id="sActive">0</div>
-            <div class="l">Active</div>
+            <div class="l">Active Tags</div>
           </div>
           <div class="sbox">
             <div class="v" id="sLaps">—</div>
-            <div class="l">Laps</div>
-          </div>
-          <div class="sbox">
-            <div class="v" id="sGroup">—</div>
-            <div class="l">Group</div>
+            <div class="l">Total Laps</div>
           </div>
         </div>
       </div>
@@ -1533,9 +1567,9 @@
     };
 
     const CHECKPOINTS_REQUIRED = 5;
-    const CAR_LENGTH_DEFAULT = 45;  // default car length in cm
-    const CAR_WIDTH_DEFAULT = 10;   // default car width in cm
-    const CAR_SIZE_CM = 20;
+    const CAR_LENGTH_DEFAULT = 30;  // default car length in cm
+    const CAR_WIDTH_DEFAULT = 15;   // default car width in cm
+  
 
     const ANC = [
       { x: 0, y: 0 },
@@ -2199,7 +2233,7 @@
             if (msg.cars) {
               msg.cars.forEach(car => {
                 const tid = parseInt(car.tag_id, 10); if (isNaN(tid)) return;
-                if (!tagData[tid]) tagData[tid] = { x: 0, y: 0, trail: [], lastTime: 0, speed: 0, lapInfo: null, lapStartTime: null, wallHits: 0, carHits: 0 };
+                if (!tagData[tid]) tagData[tid] = { x: 0, y: 0, trail: [], lastTime: 0, speed: 0, lapInfo: null, lapStartTime: null, wallHits: 0, carHits: 0, carDetails: [] };
                 if (car.x != null) tagData[tid].x = car.x;
                 if (car.y != null) tagData[tid].y = car.y;
                 tagData[tid].lastTime = Date.now();
@@ -2220,7 +2254,7 @@
           if (msg.type === 'tag_position') {
             const tid = parseInt(msg.tag_id, 10); if (isNaN(tid)) return;
             rawMonitorIngest(tid, msg);
-            if (!tagData[tid]) tagData[tid] = { x: 0, y: 0, heading: 0, isStatic: false, trail: [], lastTime: 0, speed: 0, lapInfo: null, lapStartTime: null, wallHits: 0, carHits: 0 };
+            if (!tagData[tid]) tagData[tid] = { x: 0, y: 0, heading: 0, isStatic: false, trail: [], lastTime: 0, speed: 0, lapInfo: null, lapStartTime: null, wallHits: 0, carHits: 0, carDetails: [] };
 
             // Store server-filtered position
             tagData[tid].x = msg.x;
@@ -2347,17 +2381,28 @@
                   return `🚧 WALL  ${_p ? _p.player_name : ev.car_name}`;
                 }
                 if (ev.type === 'car') {
-                  const _p = players.find(p => p.tag_id !== null && parseInt(p.tag_id, 10) === ev.attacker);
-                  const _v = players.find(p => p.tag_id !== null && parseInt(p.tag_id, 10) === ev.victim);
-                  if (_p && _p.tag_id !== null) {
-                    const _t = parseInt(_p.tag_id, 10);
-                    if (!isNaN(_t) && tagData[_t]) {
-                      tagData[_t].carHits = (tagData[_t].carHits || 0) + 1;
-                      renderPlayers();
-                      refreshCollisionStats();
-                    }
+                  const atkId = ev.attacker;
+                  const vicId = ev.victim;
+                  const _p = players.find(p => p.tag_id !== null && parseInt(p.tag_id, 10) === atkId);
+                  const _v = players.find(p => p.tag_id !== null && parseInt(p.tag_id, 10) === vicId);
+                  const atkName = _p ? _p.player_name : (ev.attacker_name || `Car${atkId}`);
+                  const vicName = _v ? _v.player_name : (ev.victim_name || `Car${vicId}`);
+
+                  if (atkId != null && !isNaN(atkId)) {
+                    if (!tagData[atkId]) tagData[atkId] = { x: 0, y: 0, trail: [], lastTime: 0, speed: 0, wallHits: 0, carHits: 0 };
+                    tagData[atkId].carHits = (tagData[atkId].carHits || 0) + 1;
+                    tagData[atkId].carDetails = tagData[atkId].carDetails || [];
+                    tagData[atkId].carDetails.push({ role: 'attacker', opponentId: vicId, opponentName: vicName, time: Date.now() });
                   }
-                  return `💥 HIT  ${_p ? _p.player_name : ev.attacker_name} → ${_v ? _v.player_name : ev.victim_name}`;
+                  if (vicId != null && !isNaN(vicId)) {
+                    if (!tagData[vicId]) tagData[vicId] = { x: 0, y: 0, trail: [], lastTime: 0, speed: 0, wallHits: 0, carHits: 0 };
+                    tagData[vicId].carHits = (tagData[vicId].carHits || 0) + 1;
+                    tagData[vicId].carDetails = tagData[vicId].carDetails || [];
+                    tagData[vicId].carDetails.push({ role: 'victim', opponentId: atkId, opponentName: atkName, time: Date.now() });
+                  }
+                  renderPlayers();
+                  refreshCollisionStats();
+                  return `💥 HIT  ${atkName} → ${vicName}`;
                 }
                 return JSON.stringify(ev);
               }));
@@ -2457,9 +2502,14 @@
     connectWS();
 
     setInterval(() => {
-      document.getElementById('sPkt').textContent = packetsThisSec; packetsThisSec = 0;
-      const now = Date.now();
-      document.getElementById('sActive').textContent = players.filter(p => { if (p.tag_id === null) return false; const d = tagData[parseInt(p.tag_id, 10)]; return d && (now - d.lastTime) < 4000; }).length;
+      const elPkt = document.getElementById('sPkt');
+      if (elPkt) elPkt.textContent = packetsThisSec;
+      packetsThisSec = 0;
+      const elActive = document.getElementById('sActive');
+      if (elActive) {
+        const now = Date.now();
+        elActive.textContent = players.filter(p => { if (p.tag_id === null) return false; const d = tagData[parseInt(p.tag_id, 10)]; return d && (now - d.lastTime) < 4000; }).length;
+      }
       refreshDebugBar();
     }, 1000);
 
@@ -2831,6 +2881,7 @@
         tagData[tid].lapStartTime = null;
         tagData[tid].wallHits     = 0;
         tagData[tid].carHits      = 0;
+        tagData[tid].carDetails   = [];
       });
       liveLeaderboard = [];
       refreshCollisionStats();   // redraws cs_wall / cs_car / cs_pen / cs_bon → all 0
@@ -2870,28 +2921,77 @@
         let posLine = '';
         if (racing && d) posLine = `<div class="pcard-pos" id="ppos-${tid}">x:${d.x.toFixed(1)} y:${d.y.toFixed(1)} cm · ${(d.speed || 0).toFixed(1)} km/h</div>`;
         else if (currentGroupStatus === 'live' && !reassignMode && !isNaN(tid)) posLine = `<div class="pcard-sub" style="color:#fbbf24">Waiting for signal…</div>`;
+        
+        // --- Live Collision & Wall Hit details ---
+        const wH = d?.wallHits || 0, cH = d?.carHits || 0;
+        let colOppList = [];
+        if (d?.carDetails && d.carDetails.length > 0) {
+          const oppMap = {};
+          d.carDetails.forEach(item => {
+            const name = item.opponentName || `Tag ${item.opponentId}`;
+            if (!oppMap[name]) oppMap[name] = { atk: 0, vic: 0, total: 0 };
+            if (item.role === 'attacker') oppMap[name].atk++;
+            else oppMap[name].vic++;
+            oppMap[name].total++;
+          });
+          colOppList = Object.entries(oppMap).map(([name, s]) => {
+            const details = [];
+            if (s.atk > 0) details.push(`Hit ${s.atk}×`);
+            if (s.vic > 0) details.push(`Hit by ${s.vic}×`);
+            return `${name} (${details.join(', ')})`;
+          });
+        }
+        
         let lapLine = '';
         if (d?.lapInfo?.is_racing) {
           const li = d.lapInfo, cpHit = li.checkpoints_hit || 0, cpTotal = li.checkpoints_total || CHECKPOINTS_REQUIRED;
           const lb = liveLeaderboard.find(r => r.car_id === tid), bestElp = (lb && lb.best_elp < 1e9) ? lb.best_elp : null;
-          const wH = d.wallHits || 0, cH = d.carHits || 0, penTot = lb?.penalty_total ?? 0, bonTot = lb?.bonus_total ?? 0;
+          const penTot = lb?.penalty_total ?? 0, bonTot = lb?.bonus_total ?? 0;
           let colRow = '';
-          if (wH > 0 || cH > 0 || penTot > 0 || bonTot > 0) { colRow = '<div class="pcard-col-row">'; if (wH > 0) colRow += `<span class="col-chip cc-wall">🚧 ${wH}×wall</span>`; if (cH > 0) colRow += `<span class="col-chip cc-car">💥 ${cH}×hit</span>`; if (penTot > 0) colRow += `<span class="col-chip cc-pen">+${penTot.toFixed(1)}s</span>`; if (bonTot > 0) colRow += `<span class="col-chip cc-bon">-${bonTot.toFixed(1)}s</span>`; colRow += '</div>'; }
+          if (wH > 0 || cH > 0 || penTot > 0 || bonTot > 0 || colOppList.length > 0) {
+            colRow = '<div class="col-detail-box">';
+            if (wH > 0) colRow += `<div class="col-detail-row wall">🚧 Wall Hits: <strong>${wH}</strong></div>`;
+            else colRow += `<div class="col-detail-row" style="color:#cbd5e1;">🚧 Wall Hits: 0</div>`;
+            
+            if (colOppList.length > 0) {
+              colRow += `<div class="col-detail-row car">💥 Collisions: <span class="col-detail-opp">${colOppList.join(' · ')}</span></div>`;
+            } else if (cH > 0) {
+              colRow += `<div class="col-detail-row car">💥 Car Hits: <strong>${cH}</strong></div>`;
+            }
+            if (penTot > 0 || bonTot > 0) {
+              colRow += '<div class="pcard-col-row" style="margin-top:4px;">';
+              if (penTot > 0) colRow += `<span class="col-chip cc-pen">+${penTot.toFixed(1)}s Pen</span>`;
+              if (bonTot > 0) colRow += `<span class="col-chip cc-bon">-${bonTot.toFixed(1)}s Bon</span>`;
+              colRow += '</div>';
+            }
+            colRow += '</div>';
+          }
           const cpPips = Array.from({ length: cpTotal }, (_, i) => { const done = i < cpHit, next = i === cpHit, col = done ? '#00ff88' : (next ? '#ffd700' : 'rgba(255,255,255,0.12)'), brd = done ? '#00ff88' : (next ? '#ffd700' : 'rgba(255,255,255,0.2)'); return `<span title="CP${i}" style="display:inline-block;width:11px;height:11px;border-radius:50%;background:${col};border:1.5px solid ${brd};transition:background .3s;"></span>`; }).join('');
           const cpColor = cpHit >= cpTotal ? '#00ff88' : (cpHit > 0 ? '#ffd700' : 'rgba(255,255,255,0.35)');
           const cpTagLabel = `Tag ${!isNaN(tid) ? tid : '?'} — ${cpHit}/${cpTotal} checkpoint${cpTotal !== 1 ? 's' : ''}`;
-          lapLine = `<div class="pcard-timing"><div class="pcard-timing-row"><span class="pcard-timing-label">LAP ${li.current_lap} / ${li.total_laps}</span><span class="pcard-timing-label" style="color:rgba(255,255,255,.2)">CURRENT</span></div><div class="pcard-timing-row"><span class="pcard-timing-value running lap-timer" data-tag="${tid}">0.00</span></div><div class="pcard-timing-row" style="margin-top:5px;padding-top:5px;border-top:1px solid rgba(255,255,255,.06)"><span class="pcard-timing-label">BEST LAP</span>${bestElp != null ? `<span class="pcard-timing-value best" id="best-${tid}">${fmtLapTime(bestElp)}</span>` : `<span class="pcard-timing-value no-data" id="best-${tid}">—</span>`}</div><div class="pcard-cp-row"><span style="font-size:.55rem;letter-spacing:1px;color:rgba(255,255,255,.3);margin-right:4px;">CP</span>${cpPips}<span style="font-size:.58rem;color:${cpHit >= cpTotal ? '#00ff88' : 'rgba(255,255,255,.3)'};margin-left:4px;font-weight:700;">${cpHit}/${cpTotal}</span></div><div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,.06);font-family:'JetBrains Mono',monospace;font-size:.68rem;font-weight:700;color:${cpColor};letter-spacing:.3px;">${cpTagLabel}${cpHit >= cpTotal ? ' ✓' : ''}</div>${colRow}</div>`;
+          lapLine = `<div class="pcard-timing"><div class="pcard-timing-row"><span class="pcard-timing-label">LAP ${li.current_lap} / ${li.total_laps}</span><span class="pcard-timing-label" style="color:rgba(255,255,255,.4)">CURRENT</span></div><div class="pcard-timing-row"><span class="pcard-timing-value running lap-timer" data-tag="${tid}">0.00</span></div><div class="pcard-timing-row" style="margin-top:5px;padding-top:5px;border-top:1px solid rgba(255,255,255,.06)"><span class="pcard-timing-label">BEST LAP</span>${bestElp != null ? `<span class="pcard-timing-value best" id="best-${tid}">${fmtLapTime(bestElp)}</span>` : `<span class="pcard-timing-value no-data" id="best-${tid}">—</span>`}</div><div class="pcard-cp-row"><span style="font-size:.65rem;letter-spacing:1px;color:rgba(255,255,255,.6);margin-right:4px;font-weight:700;">CP</span>${cpPips}<span style="font-size:.68rem;color:${cpHit >= cpTotal ? '#00ff88' : 'rgba(255,255,255,.6)'};margin-left:4px;font-weight:700;">${cpHit}/${cpTotal}</span></div><div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,.06);font-family:'JetBrains Mono',monospace;font-size:.72rem;font-weight:700;color:${cpColor};letter-spacing:.3px;">${cpTagLabel}${cpHit >= cpTotal ? ' ✓' : ''}</div>${colRow}</div>`;
         } else if (d?.lapInfo?.race_finished) {
           const lb = liveLeaderboard.find(r => r.car_id === tid), bestElp = (lb && lb.best_elp < 1e9) ? lb.best_elp : null;
-          const wH = d.wallHits || 0, cH = d.carHits || 0;
-          lapLine = `<div class="pcard-timing"><div class="pcard-timing-row"><span class="pcard-timing-label">FINISHED</span><span style="font-size:.8rem">🏆</span></div>${bestElp != null ? `<div class="pcard-timing-row"><span class="pcard-timing-label">BEST LAP</span><span class="pcard-timing-value best">${fmtLapTime(bestElp)}</span></div>` : ''} ${wH > 0 || cH > 0 ? `<div class="pcard-col-row">${wH > 0 ? `<span class="col-chip cc-wall">🚧 ${wH}×wall</span>` : ''}${cH > 0 ? `<span class="col-chip cc-car">💥 ${cH}×hit</span>` : ''}</div>` : ''}</div>`;
-        } else if (d?.lapInfo && !d.lapInfo.is_racing && d.lapStartTime) {
-          const lb = liveLeaderboard.find(r => r.car_id === tid), bestElp = (lb && lb.best_elp < 1e9) ? lb.best_elp : null;
-          if (bestElp != null) lapLine = `<div class="pcard-timing"><div class="pcard-timing-row"><span class="pcard-timing-label">BEST LAP</span><span class="pcard-timing-value best">${fmtLapTime(bestElp)}</span></div></div>`;
+          let colRow = '';
+          if (wH > 0 || cH > 0 || colOppList.length > 0) {
+            colRow = '<div class="col-detail-box">';
+            if (wH > 0) colRow += `<div class="col-detail-row wall">🚧 Wall Hits: <strong>${wH}</strong></div>`;
+            if (colOppList.length > 0) colRow += `<div class="col-detail-row car">💥 Collisions: <span class="col-detail-opp">${colOppList.join(' · ')}</span></div>`;
+            else if (cH > 0) colRow += `<div class="col-detail-row car">💥 Car Hits: <strong>${cH}</strong></div>`;
+            colRow += '</div>';
+          }
+          lapLine = `<div class="pcard-timing"><div class="pcard-timing-row"><span class="pcard-timing-label">FINISHED</span><span style="font-size:.8rem">🏆</span></div>${bestElp != null ? `<div class="pcard-timing-row"><span class="pcard-timing-label">BEST LAP</span><span class="pcard-timing-value best">${fmtLapTime(bestElp)}</span></div>` : ''} ${colRow}</div>`;
+        } else if (wH > 0 || cH > 0 || colOppList.length > 0) {
+          let colRow = '<div class="col-detail-box">';
+          if (wH > 0) colRow += `<div class="col-detail-row wall">🚧 Wall Hits: <strong>${wH}</strong></div>`;
+          if (colOppList.length > 0) colRow += `<div class="col-detail-row car">💥 Collisions: <span class="col-detail-opp">${colOppList.join(' · ')}</span></div>`;
+          else if (cH > 0) colRow += `<div class="col-detail-row car">💥 Car Hits: <strong>${cH}</strong></div>`;
+          colRow += '</div>';
+          lapLine = `<div class="pcard-timing">${colRow}</div>`;
         }
         const dim = getCarDim(p.gp_id);
         const tagInput = editable ? `<div class="tag-row"><input class="tag-inp" type="text" value="${!isNaN(tid) ? tid : ''}" placeholder="Tag ID (number)" data-gp="${p.gp_id}" onblur="saveTag(this)" onkeydown="if(event.key==='Enter'){event.preventDefault();saveTag(this)}"/><div class="tag-hint" id="hint-${p.gp_id}"></div><div class="dim-row"><div class="dim-field"><label>L</label><input class="dim-inp" type="number" min="1" step="0.5" value="${dim.length}" data-gp="${p.gp_id}" data-axis="length" onblur="saveDim(this)"/></div><div class="dim-field"><label>W</label><input class="dim-inp" type="number" min="1" step="0.5" value="${dim.width}" data-gp="${p.gp_id}" data-axis="width" onblur="saveDim(this)"/></div></div></div>` : '';
-        return `<div class="pcard ${racing ? 'active pulse' : ''}" style="--cc:${color}"><div class="pcard-hdr"><div class="pcard-dot"></div><div class="pcard-name">${p.player_name}</div>${!isNaN(tid) ? `<span class="pcard-tag">#${tid}</span>` : ''}<button class="btn btn-raw" style="padding:2px 6px;font-size:0.6rem;margin-left:auto;" onclick="sendWallCmd('player_laps', {gp_id: '${p.gp_id}', tag_id: '${p.tag_id}', player_name: '${p.player_name.replace(/'/g, "\\'")}'}); event.stopPropagation();">Wall Laps</button></div><div class="pcard-sub">${p.player_status || ''}</div>${posLine}${lapLine}${tagInput}</div>`;
+        return `<div class="pcard ${racing ? 'active pulse' : ''}" style="--cc:${color}"><div class="pcard-hdr"><div class="pcard-dot"></div><div class="pcard-name">${p.player_name}</div>${!isNaN(tid) ? `<span class="pcard-tag">#${tid}</span>` : ''}</div><div class="pcard-sub">${p.player_status || ''}</div>${posLine}${lapLine}${tagInput}</div>`;
       }).join('');
     }
 

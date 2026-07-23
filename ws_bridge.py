@@ -256,15 +256,15 @@ current_tournament_id:  int | None = None   # set from admin_start payload
 CORNER_CUT_PENALTY         = 3.0
 CORNER_CUT_VOID_LAP        = False
 CAR_COLLISION_DISTANCE_M   = 25.0   # fallback centre-to-centre pre-check
-CAR_COLLISION_COOLDOWN     = 1.0
+CAR_COLLISION_COOLDOWN     = 5.0   # seconds — min gap between same-pair collisions
 
 # Physical car dimensions in CENTIMETRES (F1-style RC car, tag at centre).
 # These are now just the FALLBACK/DEFAULT dimensions used when a car hasn't
 # been assigned its own length/width (see CollisionEngine.set_car_dims /
 # CAR_DIMS_DEFAULT below) — per-car dims from the tag-assignment UI take
 # priority and are used to compute each car's own collision rectangle.
-CAR_LENGTH_CM = 45.0   # default car length in cm (20cm)
-CAR_WIDTH_CM  = 10.0    # default car width in cm (7cm)
+CAR_LENGTH_CM = 30.0   # default car length in cm (30cm)
+CAR_WIDTH_CM  = 15.0    # default car width in cm (15cm)
 CAR_DIMS_DEFAULT = (CAR_LENGTH_CM, CAR_WIDTH_CM)
 SPEED_DIFF_THRESHOLD       = 10.0
 WALL_TOLERANCE_M           = 5.0
@@ -1049,6 +1049,8 @@ class LapEngine:
         print(f"🟢 ARM | {self.car_name}")
 
     def update(self, x, y, speed, now):
+        if self.race_finished:
+            return None
         cp_ev = self._check_checkpoints(x, y, now) if self.is_racing else None
         sf_ev = self._check_sf_line(x, y, now)
         return sf_ev or cp_ev
@@ -1101,6 +1103,8 @@ class LapEngine:
             cp_list[:] = [t for t in cp_list if t['car_id'] != self.car_id]
 
     def _process_crossing(self, now):
+        if self.race_finished:
+            return None
         if not self.is_racing:
             self.is_racing = True; self.current_lap = 1
             self._lap_start = now; self._cp_touched_this_lap = set()
@@ -1326,7 +1330,9 @@ class CollisionEngine:
         self.scoring = sc; self.track = trk
         self._names = {}; self._pos = {}; self._speeds = {}
         self._laps = {}; self._racing = {}
-        self._car_cd = {}; self._wall_cd = {}
+        self._car_cd        = {}   # frozenset(a,b) → timestamp of last collision
+        self._wall_cd       = {}   # cid -> timestamp of last wall hit
+        self._car_separated = {}   # frozenset(a,b) → True once cars have moved apart
         self._heading = {}   # last known heading per car (radians)
         self._dims = {}      # cid -> (length_cm, width_cm), per-car collision size
         self._reversing = {} # cid -> bool, True while driving backward
@@ -1435,19 +1441,46 @@ class CollisionEngine:
         if dist > rad_a + rad_b + 5:   # +5cm generous fudge for UWB noise
             return None
         key = frozenset([a, b])
-        if now - self._car_cd.get(key, 0) < CAR_COLLISION_COOLDOWN: return None
+
+        # ── SEPARATION + COOLDOWN GATE ────────────────────────────────
+        # Two conditions BOTH must be true before a new collision fires:
+        #   1. At least CAR_COLLISION_COOLDOWN seconds since last collision
+        #   2. Cars must have physically separated (not overlapping) at least
+        #      once since the last collision — prevents rapid-fire hits while
+        #      two cars stay in contact at the same point.
+        last_hit = self._car_cd.get(key, 0)
+        cooldown_ok   = (now - last_hit) >= CAR_COLLISION_COOLDOWN
+        separated_ok  = self._car_separated.get(key, True)  # True = never collided yet
+
         # Full OBB penetration test via Separating Axis Theorem.
         ha = self._heading.get(a, 0); hb = self._heading.get(b, 0)
         penetration = _obb_penetration(pa[0], pa[1], ha, pb[0], pb[1], hb, dims_a, dims_b)
         # Radius-based fallback: if heading is unknown (both zero) the OBB may
         # produce false negatives.  If centre-to-centre <= sum of half-diagonals
         # treat it as a confirmed contact regardless of the OBB result.
-        if penetration < CAR_COLLISION_MIN_OVERLAP_CM:
+        currently_overlapping = penetration >= CAR_COLLISION_MIN_OVERLAP_CM
+        if not currently_overlapping:
             if dist <= rad_a + rad_b:
-                penetration = (rad_a + rad_b) - dist   # estimated overlap
+                penetration = (rad_a + rad_b) - dist
+                currently_overlapping = penetration >= CAR_COLLISION_MIN_OVERLAP_CM
             else:
-                return None
-        self._car_cd[key] = now
+                currently_overlapping = False
+
+        if not currently_overlapping:
+            # Cars are apart — mark this pair as separated so the next
+            # overlap after cooldown can fire a new collision.
+            if key in self._car_separated:
+                self._car_separated[key] = True
+            return None
+
+        # Cars ARE overlapping — check if we should fire a collision event
+        if not (cooldown_ok and separated_ok):
+            # Still in cooldown OR cars never separated — suppress
+            return None
+
+        # Fire collision — record timestamp and require separation before next
+        self._car_cd[key]        = now
+        self._car_separated[key] = False   # must separate before next hit
 
         # ── Aggressor determination ─────────────────────────────────────
         # A reversing car is ALWAYS the aggressor, regardless of speed, and
@@ -1518,7 +1551,7 @@ class CollisionEngine:
 
     def reset(self):
         self.events.clear(); self.anomalies.clear()
-        self._car_cd.clear(); self._wall_cd.clear()
+        self._car_cd.clear(); self._wall_cd.clear(); self._car_separated.clear()
         print("✓ Collision reset")
 
 
