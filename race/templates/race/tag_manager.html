@@ -2587,7 +2587,7 @@
       const tournamentId = await getTournamentId(slug);
       if (!tournamentId) { showWallToast('⚠ Could not resolve tournament ID', 'warn'); return; }
 
-      const selectedGroupId = document.getElementById('gSel').value || null;
+      const selectedGroupId = (typeof currentGroupId !== 'undefined' && currentGroupId) ? currentGroupId : (document.getElementById('gSel')?.value || null);
 
       const btn = document.getElementById('wbtn-' + screenType);
       if (btn) { btn.classList.add('sending'); btn.disabled = true; }
