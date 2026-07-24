@@ -1962,11 +1962,11 @@
           ctx.restore();
           ctx.fillStyle = 'rgba(255,255,255,0.5)';
           ctx.font = 'bold 9px JetBrains Mono,monospace'; ctx.textAlign = 'center';
-          ctx.fillText('CP' + idx, p.px, p.py + 3);
+          ctx.fillText('CP' + cp.id, p.px, p.py + 3);
 
           // Small colored dots on the rim — one per car that has touched
           // this CP this lap. Resets automatically when their lap completes.
-          const activeTouches = cpActiveLap[String(idx)] || [];
+          const activeTouches = cpActiveLap[String(cp.id)] || [];
           if (activeTouches.length > 0) {
             activeTouches.forEach((t, di) => {
               const pIdx = players.findIndex(pl => pl.tag_id !== null && parseInt(pl.tag_id, 10) === t.car_id);

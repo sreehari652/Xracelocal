@@ -243,10 +243,10 @@ CP_MIN_RADIUS = 45.00
 
 # ── Default checkpoints in CENTIMETRES (overridden by CSV) ─────────────────
 CHECKPOINTS = [
-    (390.0, 320.0, 22.0), (290.0, 325.0, 22.0), (190.0, 310.0, 22.0),
-    (80.0, 290.0, 22.0), (55.0, 240.0, 22.0), (80.0, 185.0, 22.0),
-    (160.0, 140.0, 22.0), (280.0, 100.0, 22.0), (420.0, 110.0, 22.0),
-    (530.0, 165.0, 22.0), (555.0, 235.0, 22.0), (530.0, 295.0, 22.0),
+    (0, 390.0, 320.0, 22.0), (1, 290.0, 325.0, 22.0), (2, 190.0, 310.0, 22.0),
+    (3, 80.0, 290.0, 22.0), (4, 55.0, 240.0, 22.0), (5, 80.0, 185.0, 22.0),
+    (6, 160.0, 140.0, 22.0), (7, 280.0, 100.0, 22.0), (8, 420.0, 110.0, 22.0),
+    (9, 530.0, 165.0, 22.0), (10, 555.0, 235.0, 22.0), (11, 530.0, 295.0, 22.0),
 ]
 
 tag_to_gp:              dict       = {}
@@ -516,7 +516,7 @@ def _reorder_checkpoints_by_track_path(td: 'TrackData', cp_dict: dict):
     without path data behave exactly as before.
     """
     ids_sorted = sorted(cp_dict.keys())
-    fallback = [cp_dict[k] for k in ids_sorted]
+    fallback = [(k, cp_dict[k][0], cp_dict[k][1], cp_dict[k][2]) for k in ids_sorted]
 
     n = len(td.center)
     if n < 3 or len(cp_dict) < 2:
@@ -563,7 +563,7 @@ def _reorder_checkpoints_by_track_path(td: 'TrackData', cp_dict: dict):
         ranked.append((arc_forward(idx), cid))
     ranked.sort(key=lambda t: t[0])
 
-    ordered = [cp_dict[cid] for _, cid in ranked]
+    ordered = [(cid, cp_dict[cid][0], cp_dict[cid][1], cp_dict[cid][2]) for _, cid in ranked]
     order_str = ' → '.join(str(cid) for _, cid in ranked)
     print(f"[TRACK] Checkpoint lap order resolved from track path: id {order_str} "
           f"(was id order {','.join(str(i) for i in ids_sorted)})")
@@ -631,8 +631,8 @@ class TrackData:
             inner=self.inner,
             outer=self.outer,
             checkpoints=[
-                {"id": i, "x": cp[0], "y": cp[1], "r": cp[2]}
-                for i, cp in enumerate(self.checkpoints)
+                {"id": cp[0], "x": cp[1], "y": cp[2], "r": cp[3]}
+                for cp in self.checkpoints
             ],
             start_finish=dict(
                 x1=self.sf_x1, y1=self.sf_y1,
@@ -1266,7 +1266,7 @@ class LapEngine:
         # or a single combined CP — see the n == 1 branch below).
         intermediate_total = max(0, n - 2)
 
-        for idx, (cx, cy, cr) in enumerate(CHECKPOINTS):
+        for idx, (cid, cx, cy, cr) in enumerate(CHECKPOINTS):
             eff_r = max(cr, CP_MIN_RADIUS)
             dist = math.hypot(x - cx, y - cy)
             if dist > eff_r:
@@ -1311,33 +1311,33 @@ class LapEngine:
 
             self.current_lap_cp_hits.append(idx)
             progress = 1 + len(self._cp_touched_this_lap) + (1 if self._final_cp_done else 0)
-            print(f"  ✔ CP{idx} ({hit_kind}) | {self.car_name} @ ({x:.3f},{y:.3f})cm "
+            print(f"  ✔ CP{cid} ({hit_kind}) | {self.car_name} @ ({x:.3f},{y:.3f})cm "
                   f"dist={dist:.1f}cm (r={eff_r:.0f}cm) "
                   f"[{progress}/{n}]")
 
             # All-time history (sidebar panel)
-            if idx not in checkpoint_touch_history:
-                checkpoint_touch_history[idx] = []
-            if not any(t['car_id'] == self.car_id for t in checkpoint_touch_history[idx]):
-                checkpoint_touch_history[idx].append({
+            if cid not in checkpoint_touch_history:
+                checkpoint_touch_history[cid] = []
+            if not any(t['car_id'] == self.car_id for t in checkpoint_touch_history[cid]):
+                checkpoint_touch_history[cid].append({
                     "car_id": self.car_id, "car_name": self.car_name,
                     "lap": self.current_lap, "time": now,
                 })
 
             # Active-lap tracking (canvas dots — resets per car per lap)
-            if idx not in checkpoint_active_lap:
-                checkpoint_active_lap[idx] = []
-            checkpoint_active_lap[idx] = [
-                t for t in checkpoint_active_lap[idx] if t['car_id'] != self.car_id
+            if cid not in checkpoint_active_lap:
+                checkpoint_active_lap[cid] = []
+            checkpoint_active_lap[cid] = [
+                t for t in checkpoint_active_lap[cid] if t['car_id'] != self.car_id
             ]
-            checkpoint_active_lap[idx].append({
+            checkpoint_active_lap[cid].append({
                 "car_id": self.car_id, "car_name": self.car_name,
             })
 
             return dict(type='checkpoint', car_id=self.car_id, car_name=self.car_name,
-                        cp_index=idx, total=n,
-                        cp_touches=checkpoint_touch_history.get(idx, []),
-                        cp_active=checkpoint_active_lap.get(idx, []))
+                        cp_index=cid, total=n,
+                        cp_touches=checkpoint_touch_history.get(cid, []),
+                        cp_active=checkpoint_active_lap.get(cid, []))
         return None
 
     def elapsed(self, now):
@@ -2091,6 +2091,7 @@ async def handle_client(ws):
                                          attacker_penalty=CAR_COLLISION_ATTACKER_PENALTY,
                                          victim_bonus=CAR_COLLISION_VICTIM_BONUS),
                         timestamp=time.time())))
+                    await broadcast(build_state(time.time()))
                     print(f"[CMD] Start  group={current_group_id}  laps={TOTAL_LAPS}  "
                           f"wall={WALL_HIT_PENALTY}s  atk={CAR_COLLISION_ATTACKER_PENALTY}s  "
                           f"vic_bonus={CAR_COLLISION_VICTIM_BONUS}s")
@@ -2122,6 +2123,7 @@ async def handle_client(ws):
                     reset_race_config()
                     await broadcast(json.dumps(dict(type="admin_event", event="race_reset",
                         message="Race reset", timestamp=time.time())))
+                    await broadcast(build_state(time.time()))
                     print("[CMD] Reset")
 
                 elif mt == 'get_stats':
