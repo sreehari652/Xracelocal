@@ -2775,16 +2775,29 @@
       const res = await apiPatch(API.markFinish, { group_id: currentGroupId }); if (!res.success) { alert('Failed'); return; }
       currentGroupStatus = 'finished'; setBadge('finished');
       const gSelEl = document.getElementById('gSel');
+      let isFinal = false;
       if (gSelEl && gSelEl.selectedIndex >= 0) {
         const opt = gSelEl.options[gSelEl.selectedIndex];
         if (opt) {
           opt.dataset.status = 'finished'; opt.textContent = opt.textContent.replace(/\s*\[.*?\]\s*$/, '') + ' [finished]';
+          isFinal = opt.dataset.is_final === 'true';
         }
       }
       sendWS({ type: 'reset' }); appendFeed(['⏹ Race finished']);
       Object.keys(tagData).forEach(tid => { tagData[tid].trail = []; tagData[tid].lapInfo = null; tagData[tid].lapStartTime = null; });
       liveLeaderboard = []; cpTouches = {}; renderLeaderboard(); renderCpPanel(); refreshCollisionStats(); resetAllEma(); reassignMode = true; updateButtons(); renderPlayers();
-      // Backend handles qualify and standing screen broadcasts automatically
+
+      // 1. Immediately push qualify screen
+      await pushScreen('qualify');
+
+      // 2. 8 seconds later, push standing screen ONLY if it's the finale round
+      if (isFinal) {
+        setTimeout(async () => {
+          if (currentGroupStatus === 'finished') {
+            await pushScreen('standing');
+          }
+        }, 8000);
+      }
     }
 
     function doRestart() {
