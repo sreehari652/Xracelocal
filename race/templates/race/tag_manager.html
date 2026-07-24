@@ -2748,7 +2748,8 @@
       const opt = document.getElementById('gSel').options[document.getElementById('gSel').selectedIndex];
       opt.dataset.status = 'live'; opt.textContent = opt.textContent.replace(/\s*\[.*?\]\s*$/, '') + ' [live]';
       cpTouches = {}; cpActiveLap = {}; renderCpPanel(); resetAllEma();
-      await pushScreen('counter');
+      // No counter screen push — backend handles countdown broadcast via Celery
+      // After 5 seconds automatically push leaderboard to local wall
       setTimeout(async () => {
         if (currentGroupStatus === 'live') {
           await pushScreen('leaderboard');
