@@ -2578,7 +2578,7 @@
       const tournamentId = await getTournamentId(slug);
       if (!tournamentId) { showWallToast('⚠ Could not resolve tournament ID', 'warn'); return; }
 
-      const selectedGroupId = document.getElementById('gSel').value || null;
+      const selectedGroupId = (typeof currentGroupId !== 'undefined' && currentGroupId) ? currentGroupId : (document.getElementById('gSel')?.value || null);
 
       const btn = document.getElementById('wbtn-' + screenType);
       if (btn) { btn.classList.add('sending'); btn.disabled = true; }
@@ -2734,27 +2734,48 @@
 
     async function doLive() {
       if (!currentGroupId) return;
+      if (reassignMode) {
+        doRestart();
+        return;
+      }
       const res = await apiPatch(API.markLive, { group_id: currentGroupId }); if (!res.success) { alert('Failed to mark group live'); return; }
       currentGroupStatus = 'live'; reassignMode = false; setBadge('live'); updateButtons();
-      const opt = document.getElementById('gSel').options[document.getElementById('gSel').selectedIndex];
-      opt.dataset.status = 'live'; opt.textContent = opt.textContent.replace(/\s*\[.*?\]\s*$/, '') + ' [live]';
+      const gSelEl = document.getElementById('gSel');
+      if (gSelEl && gSelEl.selectedIndex >= 0) {
+        const opt = gSelEl.options[gSelEl.selectedIndex];
+        if (opt) {
+          opt.dataset.status = 'live'; opt.textContent = opt.textContent.replace(/\s*\[.*?\]\s*$/, '') + ' [live]';
+        }
+      }
       cpTouches = {}; cpActiveLap = {}; renderCpPanel(); resetAllEma();
+      // 1. Immediately push counter screen locally
       await pushScreen('counter');
+      // 2. Exactly 5 seconds later, switch to leaderboard
+      setTimeout(async () => {
+        if (currentGroupStatus === 'live') {
+          await pushScreen('leaderboard');
+        }
+      }, 5000);
       sendWS({ type: 'admin_start', group_id: parseInt(currentGroupId), tournament_id: currentTournamentId, total_laps: currentTotalLaps, tag_map: buildTagMap(), car_dims: buildCarDimsMap(), race_config: raceConfig, track_csv: currentTrackCSV, checkpoints_required: CHECKPOINTS_REQUIRED });
       appendFeed([`▶ Group ${currentGroupId} LIVE – ${currentTotalLaps} laps, ${CHECKPOINTS_REQUIRED} CPs/lap`]);
       renderPlayers();
-
     }
 
     async function doFinish() {
       if (!currentGroupId) return; if (!confirm('Mark race as finished?')) return;
       const res = await apiPatch(API.markFinish, { group_id: currentGroupId }); if (!res.success) { alert('Failed'); return; }
       currentGroupStatus = 'finished'; setBadge('finished');
-      const opt = document.getElementById('gSel').options[document.getElementById('gSel').selectedIndex];
-      opt.dataset.status = 'finished'; opt.textContent = opt.textContent.replace(/\s*\[.*?\]\s*$/, '') + ' [finished]';
+      const gSelEl = document.getElementById('gSel');
+      if (gSelEl && gSelEl.selectedIndex >= 0) {
+        const opt = gSelEl.options[gSelEl.selectedIndex];
+        if (opt) {
+          opt.dataset.status = 'finished'; opt.textContent = opt.textContent.replace(/\s*\[.*?\]\s*$/, '') + ' [finished]';
+        }
+      }
       sendWS({ type: 'reset' }); appendFeed(['⏹ Race finished']);
       Object.keys(tagData).forEach(tid => { tagData[tid].trail = []; tagData[tid].lapInfo = null; tagData[tid].lapStartTime = null; });
       liveLeaderboard = []; cpTouches = {}; renderLeaderboard(); renderCpPanel(); refreshCollisionStats(); resetAllEma(); reassignMode = true; updateButtons(); renderPlayers();
+      // Backend handles qualify and standing screen broadcasts automatically
     }
 
     function doRestart() {
@@ -2858,12 +2879,31 @@
         console.warn('[ResetGroup] Failed to delete lap records:', e);
       }
 
+      // Mark group as live in backend API
+      try {
+        await apiPatch(API.markLive, { group_id: currentGroupId });
+      } catch (e) {
+        console.warn('[Restart] Failed to mark group live in backend:', e);
+      }
+
+      currentGroupStatus = 'live'; reassignMode = false; setBadge('live'); updateButtons();
+      const opt = document.getElementById('gSel').options[document.getElementById('gSel').selectedIndex];
+      if (opt) {
+        opt.dataset.status = 'live';
+        opt.textContent = opt.textContent.replace(/\s*\[.*?\]\s*$/, '') + ' [live]';
+      }
+
       // Reset engines, THEN re-arm with the track CSV + new tag map.
       // (A bare 'reset' alone never loads track_csv on the bridge side,
       // so START_LINE_X/CHECKPOINTS would stay stuck on hardcoded defaults.)
       sendWS({ type: 'reset' });
-      cpTouches = {}; renderCpPanel(); resetAllEma();
+      cpTouches = {}; cpActiveLap = {}; renderCpPanel(); resetAllEma();
       await pushScreen('counter');
+      setTimeout(async () => {
+        if (currentGroupStatus === 'live') {
+          await pushScreen('leaderboard');
+        }
+      }, 5000);
       sendWS({ type: 'admin_start', group_id: parseInt(currentGroupId), tournament_id: currentTournamentId, total_laps: currentTotalLaps, tag_map: buildTagMap(), car_dims: buildCarDimsMap(), race_config: raceConfig, track_csv: currentTrackCSV, checkpoints_required: CHECKPOINTS_REQUIRED });
       // Reset ALL per-tag race data so sidebar shows 0 immediately after restart
       Object.keys(tagData).forEach(tid => {
@@ -2877,10 +2917,8 @@
       liveLeaderboard = [];
       refreshCollisionStats();   // redraws cs_wall / cs_car / cs_pen / cs_bon → all 0
       renderLeaderboard();       // clears leaderboard table
-      currentGroupStatus = 'live'; reassignMode = false; setBadge('live');
       appendFeed(['▶ Race restarted — tags reassigned, track reloaded, LIVE']);
       renderPlayers();
-      updateButtons();
       refreshDebugBar();
     }
 
