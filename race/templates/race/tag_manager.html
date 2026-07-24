@@ -2748,8 +2748,14 @@
       const opt = document.getElementById('gSel').options[document.getElementById('gSel').selectedIndex];
       opt.dataset.status = 'live'; opt.textContent = opt.textContent.replace(/\s*\[.*?\]\s*$/, '') + ' [live]';
       cpTouches = {}; cpActiveLap = {}; renderCpPanel(); resetAllEma();
-      // Push counter screen — backend handles leaderboard (after 5s) via Celery
+      // 1. Immediately push counter screen locally
       await pushScreen('counter');
+      // 2. Exactly 5 seconds later, switch to leaderboard
+      setTimeout(async () => {
+        if (currentGroupStatus === 'live') {
+          await pushScreen('leaderboard');
+        }
+      }, 5000);
       sendWS({ type: 'admin_start', group_id: parseInt(currentGroupId), tournament_id: currentTournamentId, total_laps: currentTotalLaps, tag_map: buildTagMap(), car_dims: buildCarDimsMap(), race_config: raceConfig, track_csv: currentTrackCSV, checkpoints_required: CHECKPOINTS_REQUIRED });
       appendFeed([`▶ Group ${currentGroupId} LIVE – ${currentTotalLaps} laps, ${CHECKPOINTS_REQUIRED} CPs/lap`]);
       renderPlayers();
@@ -2874,6 +2880,11 @@
       sendWS({ type: 'reset' });
       cpTouches = {}; renderCpPanel(); resetAllEma();
       await pushScreen('counter');
+      setTimeout(async () => {
+        if (currentGroupStatus === 'live') {
+          await pushScreen('leaderboard');
+        }
+      }, 5000);
       sendWS({ type: 'admin_start', group_id: parseInt(currentGroupId), tournament_id: currentTournamentId, total_laps: currentTotalLaps, tag_map: buildTagMap(), car_dims: buildCarDimsMap(), race_config: raceConfig, track_csv: currentTrackCSV, checkpoints_required: CHECKPOINTS_REQUIRED });
       // Reset ALL per-tag race data so sidebar shows 0 immediately after restart
       Object.keys(tagData).forEach(tid => {
