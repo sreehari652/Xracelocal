@@ -2748,13 +2748,8 @@
       const opt = document.getElementById('gSel').options[document.getElementById('gSel').selectedIndex];
       opt.dataset.status = 'live'; opt.textContent = opt.textContent.replace(/\s*\[.*?\]\s*$/, '') + ' [live]';
       cpTouches = {}; cpActiveLap = {}; renderCpPanel(); resetAllEma();
-      // No counter screen push — backend handles countdown broadcast via Celery
-      // After 5 seconds automatically push leaderboard to local wall
-      setTimeout(async () => {
-        if (currentGroupStatus === 'live') {
-          await pushScreen('leaderboard');
-        }
-      }, 5000);
+      // Push counter screen — backend handles leaderboard (after 5s) via Celery
+      await pushScreen('counter');
       sendWS({ type: 'admin_start', group_id: parseInt(currentGroupId), tournament_id: currentTournamentId, total_laps: currentTotalLaps, tag_map: buildTagMap(), car_dims: buildCarDimsMap(), race_config: raceConfig, track_csv: currentTrackCSV, checkpoints_required: CHECKPOINTS_REQUIRED });
       appendFeed([`▶ Group ${currentGroupId} LIVE – ${currentTotalLaps} laps, ${CHECKPOINTS_REQUIRED} CPs/lap`]);
       renderPlayers();
@@ -2769,13 +2764,7 @@
       sendWS({ type: 'reset' }); appendFeed(['⏹ Race finished']);
       Object.keys(tagData).forEach(tid => { tagData[tid].trail = []; tagData[tid].lapInfo = null; tagData[tid].lapStartTime = null; });
       liveLeaderboard = []; cpTouches = {}; renderLeaderboard(); renderCpPanel(); refreshCollisionStats(); resetAllEma(); reassignMode = true; updateButtons(); renderPlayers();
-      const isFinal = opt?.dataset.is_final === 'true';
-      await pushScreen('qualify');
-      if (isFinal) {
-        setTimeout(async () => {
-          await pushScreen('standing');
-        }, 12000);
-      }
+      // Backend handles qualify and standing screen broadcasts automatically
     }
 
     function doRestart() {
