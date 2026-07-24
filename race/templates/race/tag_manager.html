@@ -2749,8 +2749,13 @@
       }
       const res = await apiPatch(API.markLive, { group_id: currentGroupId }); if (!res.success) { alert('Failed to mark group live'); return; }
       currentGroupStatus = 'live'; reassignMode = false; setBadge('live'); updateButtons();
-      const opt = document.getElementById('gSel').options[document.getElementById('gSel').selectedIndex];
-      opt.dataset.status = 'live'; opt.textContent = opt.textContent.replace(/\s*\[.*?\]\s*$/, '') + ' [live]';
+      const gSelEl = document.getElementById('gSel');
+      if (gSelEl && gSelEl.selectedIndex >= 0) {
+        const opt = gSelEl.options[gSelEl.selectedIndex];
+        if (opt) {
+          opt.dataset.status = 'live'; opt.textContent = opt.textContent.replace(/\s*\[.*?\]\s*$/, '') + ' [live]';
+        }
+      }
       cpTouches = {}; cpActiveLap = {}; renderCpPanel(); resetAllEma();
       // 1. Immediately push counter screen locally
       await pushScreen('counter');
@@ -2769,8 +2774,13 @@
       if (!currentGroupId) return; if (!confirm('Mark race as finished?')) return;
       const res = await apiPatch(API.markFinish, { group_id: currentGroupId }); if (!res.success) { alert('Failed'); return; }
       currentGroupStatus = 'finished'; setBadge('finished');
-      const opt = document.getElementById('gSel').options[document.getElementById('gSel').selectedIndex];
-      opt.dataset.status = 'finished'; opt.textContent = opt.textContent.replace(/\s*\[.*?\]\s*$/, '') + ' [finished]';
+      const gSelEl = document.getElementById('gSel');
+      if (gSelEl && gSelEl.selectedIndex >= 0) {
+        const opt = gSelEl.options[gSelEl.selectedIndex];
+        if (opt) {
+          opt.dataset.status = 'finished'; opt.textContent = opt.textContent.replace(/\s*\[.*?\]\s*$/, '') + ' [finished]';
+        }
+      }
       sendWS({ type: 'reset' }); appendFeed(['⏹ Race finished']);
       Object.keys(tagData).forEach(tid => { tagData[tid].trail = []; tagData[tid].lapInfo = null; tagData[tid].lapStartTime = null; });
       liveLeaderboard = []; cpTouches = {}; renderLeaderboard(); renderCpPanel(); refreshCollisionStats(); resetAllEma(); reassignMode = true; updateButtons(); renderPlayers();
