@@ -2214,8 +2214,8 @@
           }
           if (msg.track) applyLiveTrack(msg.track);
           // Only apply server's checkpoint_touches on initial load (no local data yet).
-          // During a race, cpTouches is owned by JS via checkpoint game events so the
-          // server's global history (which never resets per-lap) doesn't repopulate dots.
+          // During a race, it is kept in sync via checkpoint game events and synced on state_updates.
+          // cp_active_lap is updated unconditionally on every message to ensure client and server stay perfectly aligned.
           if (msg.checkpoint_touches && Object.keys(cpTouches).length === 0) { cpTouches = msg.checkpoint_touches; renderCpPanel(); }
           if (msg.cp_active_lap) { cpActiveLap = msg.cp_active_lap; }
           if (msg.race_config) {
@@ -2225,6 +2225,7 @@
             refreshDebugBar();
           }
           if (msg.type === 'state_update') {
+            if (msg.checkpoint_touches) { cpTouches = msg.checkpoint_touches; renderCpPanel(); }
             if (msg.draw_mode != null) setDrawModeUI(msg.draw_mode);
             document.getElementById('sLaps').textContent = msg.total_laps ?? '—';
             document.getElementById('sGroup').textContent = msg.group_id ?? '—';
@@ -2322,19 +2323,9 @@
                   if (_p && _p.tag_id !== null) {
                     const _t = parseInt(_p.tag_id, 10);
                     if (!isNaN(_t) && tagData[_t]) {
-                      if (tagData[_t].lapInfo) { tagData[_t].lapInfo.checkpoints_hit = 0; tagData[_t].lapInfo._cpSet = new Set(); }
                       setTimeout(renderPlayers, 10);
                     }
-                    // Clear this car's dots from all checkpoints on lap void
-                    Object.keys(cpActiveLap).forEach(cpIdx => {
-                      cpActiveLap[cpIdx] = (cpActiveLap[cpIdx] || []).filter(t => t.car_id !== parseInt(_p.tag_id, 10));
-                    });
-                    // Clear this car's touches from all checkpoints on lap void
-                    Object.keys(cpTouches).forEach(cpIdx => {
-                      cpTouches[cpIdx] = (cpTouches[cpIdx] || []).filter(t => t.car_id !== parseInt(_p.tag_id, 10));
-                    });
                   }
-                  renderCpPanel();
                   return `⚠ VOID  ${_p ? _p.player_name : ev.car_name}`;
                 }
                 if (ev.type === 'race_start') {

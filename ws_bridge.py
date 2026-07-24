@@ -498,6 +498,78 @@ def _nearest_point(points: list, x: float, y: float):
     return best
 
 
+def _reorder_checkpoints_by_track_path(td: 'TrackData', cp_dict: dict):
+    """Determine the TRUE physical lap order of checkpoints and return them
+    sorted that way — index 0 = the checkpoint the car reaches first after
+    leaving the S/F line, index -1 = the checkpoint reached last before
+    re-crossing S/F. This does NOT assume the numeric CHECKPOINT id in the
+    CSV reflects lap order — a track designer can number checkpoints in any
+    order they like (e.g. by placement order while editing), and sorting by
+    id can silently put the "first" and "last" checkpoints in the wrong
+    slots. Instead this walks the track's own CENTER path (already ordered
+    the way the car actually drives it) and measures each checkpoint's
+    distance along that path, starting just after the S/F line.
+
+    Falls back to id-ascending order (the previous behaviour) whenever the
+    CSV doesn't include a CENTER path or there's nothing useful to compute
+    from (0 or 1 checkpoints, degenerate S/F segment, etc.) — so tracks
+    without path data behave exactly as before.
+    """
+    ids_sorted = sorted(cp_dict.keys())
+    fallback = [cp_dict[k] for k in ids_sorted]
+
+    n = len(td.center)
+    if n < 3 or len(cp_dict) < 2:
+        return fallback
+
+    def nearest_center_idx(x, y):
+        best_i, best_d = 0, None
+        for i, (cx, cy) in enumerate(td.center):
+            d = (cx - x) ** 2 + (cy - y) ** 2
+            if best_d is None or d < best_d:
+                best_d, best_i = d, i
+        return best_i
+
+    # Where the S/F line sits along the CENTER path (use the raw CSV
+    # endpoints — this runs before _stretch_sf_to_track_width, so these are
+    # still meaningful points near the track's centre).
+    sf_mid_x = (td.sf_x1 + td.sf_x2) / 2.0
+    sf_mid_y = (td.sf_y1 + td.sf_y2) / 2.0
+    sf_idx = nearest_center_idx(sf_mid_x, sf_mid_y)
+
+    # Figure out which indexing direction (increasing or decreasing) matches
+    # the actual direction of travel through the S/F gate, using the same
+    # normal-vector convention as _check_sf_line / _stretch_sf_to_track_width.
+    seg_dx = td.sf_x2 - td.sf_x1
+    seg_dy = td.sf_y2 - td.sf_y1
+    seg_len = math.hypot(seg_dx, seg_dy) or 1.0
+    nx, ny = -seg_dy / seg_len, seg_dx / seg_len   # unit normal to the S/F segment
+    dsign = 1.0 if td.sf_dir == 'left_to_right' else -1.0
+    travel_x, travel_y = nx * dsign, ny * dsign
+
+    i_next = (sf_idx + 1) % n
+    i_prev = (sf_idx - 1) % n
+    tan_x = td.center[i_next][0] - td.center[i_prev][0]
+    tan_y = td.center[i_next][1] - td.center[i_prev][1]
+    forward_is_increasing = (tan_x * travel_x + tan_y * travel_y) >= 0.0
+
+    def arc_forward(idx):
+        return (idx - sf_idx) % n if forward_is_increasing else (sf_idx - idx) % n
+
+    ranked = []
+    for cid in ids_sorted:
+        x, y, r = cp_dict[cid]
+        idx = nearest_center_idx(x, y)
+        ranked.append((arc_forward(idx), cid))
+    ranked.sort(key=lambda t: t[0])
+
+    ordered = [cp_dict[cid] for _, cid in ranked]
+    order_str = ' → '.join(str(cid) for _, cid in ranked)
+    print(f"[TRACK] Checkpoint lap order resolved from track path: id {order_str} "
+          f"(was id order {','.join(str(i) for i in ids_sorted)})")
+    return ordered
+
+
 def _stretch_sf_to_track_width(td: 'TrackData'):
     """Widen the S/F gate so it spans the FULL width of the track at that
     point — from the inner boundary to the outer boundary — instead of
@@ -615,7 +687,7 @@ def parse_track_csv(csv_text: str) -> TrackData:
             continue
 
     if cp_dict:
-        td.checkpoints = [cp_dict[k] for k in sorted(cp_dict.keys())]
+        td.checkpoints = _reorder_checkpoints_by_track_path(td, cp_dict)
 
     _stretch_sf_to_track_width(td)
 
@@ -1032,12 +1104,22 @@ class LapEngine:
         self.current_lap = 0; self.laps_done = 0
         self.is_racing = False; self.race_finished = False; self.admin_armed = False
         self._lap_start = None; self._last_cross = 0.0; self._lap_times = []
-        # Order-independent checkpoint tracking: a set of indices touched
-        # so far this lap. Any checkpoint can be touched in any order, from
-        # any direction — it lights up the instant the tag enters its zone.
-        # A lap is only valid once ALL checkpoints have been touched at
-        # least once (regardless of order) before the next S/F crossing.
+        # 3-gate checkpoint state machine, evaluated in this order each lap:
+        #   1) FIRST checkpoint (CHECKPOINTS[0], immediately after S/F) must
+        #      trigger before anything else counts.
+        #   2) INTERMEDIATE checkpoints (everything between first and last)
+        #      may then be touched in any order, but every one of them must
+        #      be visited at least once.
+        #   3) FINAL checkpoint (CHECKPOINTS[-1], immediately before S/F)
+        #      stays inactive — touches on it are ignored — until every
+        #      intermediate checkpoint has been visited. Only then does it
+        #      arm, and touching it is what makes the next S/F crossing
+        #      valid.
+        # _cp_touched_this_lap holds only the INTERMEDIATE indices touched
+        # so far this lap (order-independent amongst themselves).
         self._cp_touched_this_lap: set = set()
+        self._first_cp_done: bool = False
+        self._final_cp_done: bool = False
         # Proximity-gate state: True while the tag is currently inside the
         # S/F radius. A crossing event fires only on the rising edge
         # (outside → inside), so sitting in the zone doesn't re-trigger.
@@ -1050,10 +1132,15 @@ class LapEngine:
 
     def update(self, x, y, speed, now):
         if self.race_finished:
-            return None
+            return []
+        evs = []
         cp_ev = self._check_checkpoints(x, y, now) if self.is_racing else None
+        if cp_ev:
+            evs.append(cp_ev)
         sf_ev = self._check_sf_line(x, y, now)
-        return sf_ev or cp_ev
+        if sf_ev:
+            evs.append(sf_ev)
+        return evs
 
     def _check_sf_line(self, x, y, now):
         # Full-width band gate: an oriented rectangle running the entire
@@ -1108,19 +1195,31 @@ class LapEngine:
         if not self.is_racing:
             self.is_racing = True; self.current_lap = 1
             self._lap_start = now; self._cp_touched_this_lap = set()
+            self._first_cp_done = False; self._final_cp_done = False
             self.current_lap_cp_hits = []
             self._clear_active_lap()
             self.scoring.open_lap(self.car_id, 1)
             print(f"🏁 START | {self.car_name} Lap 1/{TOTAL_LAPS}")
             return dict(type='race_start', car_id=self.car_id, car_name=self.car_name, lap=1, time=now)
 
-        if len(self._cp_touched_this_lap) < len(CHECKPOINTS):
-            missing = len(CHECKPOINTS) - len(self._cp_touched_this_lap)
-            missing_idx = [i for i in range(len(CHECKPOINTS)) if i not in self._cp_touched_this_lap]
-            print(f"⚠ LAP VOID | {self.car_name} — {missing} CP(s) not hit (missing: {missing_idx})")
-            self._cp_touched_this_lap = set()
-            self.current_lap_cp_hits = []
-            self._clear_active_lap()
+        # Lap is only valid once the FINAL checkpoint gate fired — and, by
+        # construction (see _check_checkpoints), that gate can only fire
+        # after the first checkpoint and every intermediate checkpoint have
+        # already been visited. So a single flag captures the whole chain:
+        # missing first CP, missing any intermediate CP, or reaching the
+        # final CP too early (while it was still inactive) all show up here
+        # as "final not done". A track with 0 checkpoints is trivially valid.
+        cp_requirements_met = (len(CHECKPOINTS) == 0) or self._final_cp_done
+        if not cp_requirements_met:
+            n = len(CHECKPOINTS)
+            if not self._first_cp_done:
+                reason = "first checkpoint (CP0) never triggered"
+            else:
+                intermediate_total = max(0, n - 2)
+                missing_idx = [i for i in range(1, n - 1) if i not in self._cp_touched_this_lap]
+                reason = (f"{len(missing_idx)}/{intermediate_total} intermediate CP(s) not hit "
+                          f"(missing: {missing_idx}); final CP never armed/triggered")
+            print(f"⚠ LAP VOID | {self.car_name} — {reason}")
             return dict(type='lap_void', car_id=self.car_id, car_name=self.car_name, lap=self.current_lap, time=now)
 
         raw = now - self._lap_start
@@ -1135,8 +1234,10 @@ class LapEngine:
         ls  = self.scoring.close_lap(self.car_id, raw, top_speed_kmh=top_kmh)
         self._lap_times.append(raw); self.laps_done += 1
         self._cp_touched_this_lap = set()
+        self._first_cp_done = False; self._final_cp_done = False
         self.current_lap_cp_hits = []
-        self._clear_active_lap()
+        if self.laps_done < TOTAL_LAPS:
+            self._clear_active_lap()
         ev = dict(type='lap_done', car_id=self.car_id, car_name=self.car_name,
                   lap=self.current_lap, raw_time=raw, elp=ls.elp, time=now)
 
@@ -1155,41 +1256,88 @@ class LapEngine:
         return ev
 
     def _check_checkpoints(self, x, y, now):
+        n = len(CHECKPOINTS)
+        if n == 0:
+            return None
+        first_idx = 0
+        last_idx  = n - 1
+        # Number of intermediate checkpoints (those strictly between the
+        # first and last). Zero when n <= 2 (e.g. just a first + final CP,
+        # or a single combined CP — see the n == 1 branch below).
+        intermediate_total = max(0, n - 2)
+
         for idx, (cx, cy, cr) in enumerate(CHECKPOINTS):
-            if idx in self._cp_touched_this_lap:
-                continue
             eff_r = max(cr, CP_MIN_RADIUS)
-            dist = math.hypot(x-cx, y-cy)
-            if dist <= eff_r:
+            dist = math.hypot(x - cx, y - cy)
+            if dist > eff_r:
+                continue
+
+            if n == 1:
+                # Degenerate single-checkpoint track: it acts as both the
+                # first and final gate combined — one touch satisfies both.
+                if self._first_cp_done:
+                    continue
+                self._first_cp_done = True
+                self._final_cp_done = True
+                hit_kind = 'first+final'
+
+            elif idx == first_idx:
+                # GATE 1 — must be the very first thing triggered this lap.
+                if self._first_cp_done:
+                    continue  # already triggered — no re-trigger on re-entry
+                self._first_cp_done = True
+                hit_kind = 'first'
+
+            elif idx == last_idx:
+                # GATE 3 — stays INACTIVE (touch is ignored entirely) until
+                # the first checkpoint and every intermediate checkpoint
+                # have already been visited this lap.
+                if not self._first_cp_done or len(self._cp_touched_this_lap) < intermediate_total:
+                    continue  # inactive — physically passing through does nothing
+                if self._final_cp_done:
+                    continue  # already triggered — no re-trigger on re-entry
+                self._final_cp_done = True
+                hit_kind = 'final'
+
+            else:
+                # GATE 2 — intermediate checkpoints, order-independent, but
+                # only count once the first-checkpoint gate has opened.
+                if not self._first_cp_done:
+                    continue  # ignore touches before the gate opens
+                if idx in self._cp_touched_this_lap:
+                    continue  # already touched this lap
                 self._cp_touched_this_lap.add(idx)
-                self.current_lap_cp_hits.append(idx)
-                print(f"  ✔ CP{idx} | {self.car_name} @ ({x:.3f},{y:.3f})cm "
-                      f"dist={dist:.1f}cm (r={eff_r:.0f}cm) "
-                      f"[{len(self._cp_touched_this_lap)}/{len(CHECKPOINTS)}]")
+                hit_kind = 'intermediate'
 
-                # All-time history (sidebar panel)
-                if idx not in checkpoint_touch_history:
-                    checkpoint_touch_history[idx] = []
-                if not any(t['car_id'] == self.car_id for t in checkpoint_touch_history[idx]):
-                    checkpoint_touch_history[idx].append({
-                        "car_id": self.car_id, "car_name": self.car_name,
-                        "lap": self.current_lap, "time": now,
-                    })
+            self.current_lap_cp_hits.append(idx)
+            progress = 1 + len(self._cp_touched_this_lap) + (1 if self._final_cp_done else 0)
+            print(f"  ✔ CP{idx} ({hit_kind}) | {self.car_name} @ ({x:.3f},{y:.3f})cm "
+                  f"dist={dist:.1f}cm (r={eff_r:.0f}cm) "
+                  f"[{progress}/{n}]")
 
-                # Active-lap tracking (canvas dots — resets per car per lap)
-                if idx not in checkpoint_active_lap:
-                    checkpoint_active_lap[idx] = []
-                checkpoint_active_lap[idx] = [
-                    t for t in checkpoint_active_lap[idx] if t['car_id'] != self.car_id
-                ]
-                checkpoint_active_lap[idx].append({
+            # All-time history (sidebar panel)
+            if idx not in checkpoint_touch_history:
+                checkpoint_touch_history[idx] = []
+            if not any(t['car_id'] == self.car_id for t in checkpoint_touch_history[idx]):
+                checkpoint_touch_history[idx].append({
                     "car_id": self.car_id, "car_name": self.car_name,
+                    "lap": self.current_lap, "time": now,
                 })
 
-                return dict(type='checkpoint', car_id=self.car_id, car_name=self.car_name,
-                            cp_index=idx, total=len(CHECKPOINTS),
-                            cp_touches=checkpoint_touch_history.get(idx, []),
-                            cp_active=checkpoint_active_lap.get(idx, []))
+            # Active-lap tracking (canvas dots — resets per car per lap)
+            if idx not in checkpoint_active_lap:
+                checkpoint_active_lap[idx] = []
+            checkpoint_active_lap[idx] = [
+                t for t in checkpoint_active_lap[idx] if t['car_id'] != self.car_id
+            ]
+            checkpoint_active_lap[idx].append({
+                "car_id": self.car_id, "car_name": self.car_name,
+            })
+
+            return dict(type='checkpoint', car_id=self.car_id, car_name=self.car_name,
+                        cp_index=idx, total=n,
+                        cp_touches=checkpoint_touch_history.get(idx, []),
+                        cp_active=checkpoint_active_lap.get(idx, []))
         return None
 
     def elapsed(self, now):
@@ -1198,6 +1346,14 @@ class LapEngine:
     def best_raw(self):
         return min(self._lap_times) if self._lap_times else 0.0
 
+    def _checkpoints_hit_count(self):
+        n = len(CHECKPOINTS)
+        if n <= 1:
+            return 1 if self._first_cp_done else 0
+        return (1 if self._first_cp_done else 0) \
+             + len(self._cp_touched_this_lap) \
+             + (1 if self._final_cp_done else 0)
+
     def get_info(self, now=None):
         return dict(car_id=self.car_id, car_name=self.car_name,
                     current_lap=self.current_lap, total_laps=TOTAL_LAPS,
@@ -1205,7 +1361,7 @@ class LapEngine:
                     race_finished=self.race_finished,
                     current_lap_elapsed=self.elapsed(now or time.time()),
                     best_raw=self.best_raw(), lap_times=list(self._lap_times),
-                    checkpoints_hit=len(self._cp_touched_this_lap), checkpoints_total=len(CHECKPOINTS),
+                    checkpoints_hit=self._checkpoints_hit_count(), checkpoints_total=len(CHECKPOINTS),
                     cp_hits_this_lap=list(self.current_lap_cp_hits))
 
     def reset(self):
@@ -1213,6 +1369,7 @@ class LapEngine:
         self.is_racing = False; self.race_finished = False; self.admin_armed = False
         self._in_sf_zone = False; self._lap_start = None; self._last_cross = 0.0
         self._lap_times.clear(); self._cp_touched_this_lap = set()
+        self._first_cp_done = False; self._final_cp_done = False
         self.current_lap_cp_hits = []
 
 
@@ -1236,16 +1393,16 @@ class RaceManager:
 
     def update(self, cid, x, y, speed, now):
         eng = self._engines.get(cid)
-        if not eng: return None
-        ev = eng.update(x, y, speed, now)
-        if ev:
+        if not eng: return []
+        evs = eng.update(x, y, speed, now)
+        for ev in evs:
             if ev['type'] == 'race_start' and not self.race_active:
                 self.race_active = True; self.race_start_time = now
                 print("🏁 RACE IN PROGRESS")
             if ev['type'] == 'race_finish' and all(e.race_finished for e in self._engines.values()):
                 self.race_active = False; self.race_end_time = now
                 print("🏆 ALL FINISHED")
-        return ev
+        return evs
 
     def get_info(self, cid, now=None):
         e = self._engines.get(cid)
@@ -1590,8 +1747,8 @@ def process_race_update(tid, now):
     tag = tags.get(tid)
     if not tag or not tag.is_active(): return []
     evts = []
-    ev = race_mgr.update(tid, tag.x, tag.y, tag.speed_ms, now)
-    if ev: evts.append(ev)
+    evs = race_mgr.update(tid, tag.x, tag.y, tag.speed_ms, now)
+    if evs: evts.extend(evs)
     cars = {}
     for t_id, t in tags.items():
         if t.is_active():
