@@ -2743,6 +2743,10 @@
 
     async function doLive() {
       if (!currentGroupId) return;
+      if (reassignMode) {
+        doRestart();
+        return;
+      }
       const res = await apiPatch(API.markLive, { group_id: currentGroupId }); if (!res.success) { alert('Failed to mark group live'); return; }
       currentGroupStatus = 'live'; reassignMode = false; setBadge('live'); updateButtons();
       const opt = document.getElementById('gSel').options[document.getElementById('gSel').selectedIndex];
@@ -2874,11 +2878,25 @@
         console.warn('[ResetGroup] Failed to delete lap records:', e);
       }
 
+      // Mark group as live in backend API
+      try {
+        await apiPatch(API.markLive, { group_id: currentGroupId });
+      } catch (e) {
+        console.warn('[Restart] Failed to mark group live in backend:', e);
+      }
+
+      currentGroupStatus = 'live'; reassignMode = false; setBadge('live'); updateButtons();
+      const opt = document.getElementById('gSel').options[document.getElementById('gSel').selectedIndex];
+      if (opt) {
+        opt.dataset.status = 'live';
+        opt.textContent = opt.textContent.replace(/\s*\[.*?\]\s*$/, '') + ' [live]';
+      }
+
       // Reset engines, THEN re-arm with the track CSV + new tag map.
       // (A bare 'reset' alone never loads track_csv on the bridge side,
       // so START_LINE_X/CHECKPOINTS would stay stuck on hardcoded defaults.)
       sendWS({ type: 'reset' });
-      cpTouches = {}; renderCpPanel(); resetAllEma();
+      cpTouches = {}; cpActiveLap = {}; renderCpPanel(); resetAllEma();
       await pushScreen('counter');
       setTimeout(async () => {
         if (currentGroupStatus === 'live') {
@@ -2898,10 +2916,8 @@
       liveLeaderboard = [];
       refreshCollisionStats();   // redraws cs_wall / cs_car / cs_pen / cs_bon → all 0
       renderLeaderboard();       // clears leaderboard table
-      currentGroupStatus = 'live'; reassignMode = false; setBadge('live');
       appendFeed(['▶ Race restarted — tags reassigned, track reloaded, LIVE']);
       renderPlayers();
-      updateButtons();
       refreshDebugBar();
     }
 
