@@ -83,6 +83,26 @@ KALMAN_DT_MAX     = 0.5     # clamp: if a tag went stale and comes back
                              # re-seed rather than projecting velocity
                              # across the whole gap
 
+# ── Raw position-based speed calc (TagState.update_position) ────────────
+# This is a SEPARATE speed calculation from the Kalman filter above — it's
+# the one used for lap top-speed tracking. It had no dt floor or plausibility
+# ceiling, so a single near-duplicate packet (tiny dt) or a brief filtered-
+# position glitch could produce one absurd instantaneous speed reading
+# (seen in practice: laps recording 383km/h-1292km/h "top speed" while the
+# car was actually moving at 0-10km/h the whole race). These two constants
+# fix that: POSITION_DT_MIN avoids the divide-by-near-zero blowup, and
+# MAX_PLAUSIBLE_SPEED_CMS rejects any single-sample speed above what an RC
+# car on this track can realistically reach, treating it as sensor/filter
+# noise instead of a real reading.
+POSITION_DT_MIN         = 0.01     # seconds — samples closer together than
+                                     # this are skipped for speed purposes
+                                     # rather than divided into a spike
+MAX_PLAUSIBLE_SPEED_CMS = 3000.0    # cm/s == 108 km/h. Adjust to match the
+                                     # real top speed your cars/track can hit
+                                     # — set it comfortably above genuine
+                                     # top speed but well below noise-spike
+                                     # territory (hundreds of km/h).
+
 # ═══════════════════════════════════════════════════════════════════════
 # NETWORK CONFIGURATION  ← edit here
 # ═══════════════════════════════════════════════════════════════════════
@@ -906,9 +926,20 @@ class TagState:
     def update_position(self, rx, ry, quality, anc, now):
         if self._prev_t is not None:
             dt = now - self._prev_t
-            if dt > 0:
-                self.speed_ms = math.hypot(rx - self._prev_x, ry - self._prev_y) / dt
-                self.max_speed_ms = max(self.max_speed_ms, self.speed_ms)
+            # Skip the speed update entirely on a near-duplicate/near-zero
+            # dt — dividing a small position jitter by a tiny dt is what
+            # produces artificial multi-hundred-km/h spikes.
+            if dt >= POSITION_DT_MIN:
+                instantaneous_speed = math.hypot(rx - self._prev_x, ry - self._prev_y) / dt
+                if instantaneous_speed <= MAX_PLAUSIBLE_SPEED_CMS:
+                    self.speed_ms = instantaneous_speed
+                    self.max_speed_ms = max(self.max_speed_ms, self.speed_ms)
+                else:
+                    # Sensor/filter noise, not a real reading — log it but
+                    # don't let it corrupt speed_ms or the lap's top speed.
+                    print(f"⚠️ SPEED SPIKE REJECTED | Tag{self.id} computed "
+                          f"{instantaneous_speed*0.036:.1f}km/h over dt={dt:.4f}s "
+                          f"— discarded as noise, speed unchanged.")
         self._prev_x, self._prev_y, self._prev_t = rx, ry, now
         self.x, self.y = rx, ry
         self.quality = quality; self.anchor_count = anc
