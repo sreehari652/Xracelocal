@@ -261,13 +261,36 @@ SF_GATE_EDGE_MARGIN = 15.00   # cm — extra slack past each endpoint of the
 # "touch any part near checkpoint" works reliably.
 CP_MIN_RADIUS = 45.00
 
-# ── Default checkpoints in CENTIMETRES (overridden by CSV) ─────────────────
-CHECKPOINTS = [
+DEFAULT_CIRCULAR_CHECKPOINTS = [
     (0, 390.0, 320.0, 22.0), (1, 290.0, 325.0, 22.0), (2, 190.0, 310.0, 22.0),
     (3, 80.0, 290.0, 22.0), (4, 55.0, 240.0, 22.0), (5, 80.0, 185.0, 22.0),
     (6, 160.0, 140.0, 22.0), (7, 280.0, 100.0, 22.0), (8, 420.0, 110.0, 22.0),
     (9, 530.0, 165.0, 22.0), (10, 555.0, 235.0, 22.0), (11, 530.0, 295.0, 22.0),
 ]
+def _default_checkpoints_as_lines(circles):
+    """Convert the built-in default checkpoint circles into perpendicular
+    line segments, using each checkpoint's neighbors in the list as a
+    rough centerline tangent (same idea as the CSV path's center-tangent
+    fallback in _stretch_checkpoints_to_track_width) — rather than
+    assuming every checkpoint sits on a purely horizontal stretch of
+    track, which was wrong for checkpoints on the top/bottom of the loop.
+    This is only used before a real track CSV is loaded.
+    """
+    n = len(circles)
+    lines = []
+    for i, (cid, cx, cy, cr) in enumerate(circles):
+        _, px, py, _ = circles[(i - 1) % n]
+        _, nx_pt, ny_pt, _ = circles[(i + 1) % n]
+        tx, ty = nx_pt - px, ny_pt - py
+        t_len = math.hypot(tx, ty) or 1.0
+        nx, ny = -ty / t_len, tx / t_len
+        x1, y1 = cx + nx * cr, cy + ny * cr
+        x2, y2 = cx - nx * cr, cy - ny * cr
+        lines.append((cid, x1, y1, x2, y2))
+    return lines
+
+
+CHECKPOINTS = _default_checkpoints_as_lines(DEFAULT_CIRCULAR_CHECKPOINTS)
 
 tag_to_gp:              dict       = {}
 current_group_id:       int | None = None
@@ -628,6 +651,45 @@ def _stretch_sf_to_track_width(td: 'TrackData'):
           f"→ width={width:.1f}cm")
 
 
+def _stretch_checkpoints_to_track_width(td: 'TrackData'):
+    """Widen each checkpoint to the full width of the track,
+    similar to stretching S/F. Stretches from inner to outer boundary,
+    or falls back to center-tangent perpendicular line segment.
+    """
+    new_cps = []
+    for cp in td.checkpoints:
+        cid, cx, cy, cr = cp
+        inner_pt = _nearest_point(td.inner, cx, cy)
+        outer_pt = _nearest_point(td.outer, cx, cy)
+        if inner_pt is not None and outer_pt is not None:
+            x1, y1 = inner_pt
+            x2, y2 = outer_pt
+            width = math.hypot(x2 - x1, y2 - y1)
+            print(f"[TRACK] CP{cid} stretched to full track width: ({x1:.1f},{y1:.1f}) -> ({x2:.1f},{y2:.1f}) width={width:.1f}cm")
+        elif len(td.center) >= 2:
+            best_i, best_d = 0, None
+            for i, (ccx, ccy) in enumerate(td.center):
+                d = (ccx - cx) ** 2 + (ccy - cy) ** 2
+                if best_d is None or d < best_d:
+                    best_d, best_i = d, i
+            n_c = len(td.center)
+            i_next = (best_i + 1) % n_c
+            i_prev = (best_i - 1) % n_c
+            tx = td.center[i_next][0] - td.center[i_prev][0]
+            ty = td.center[i_next][1] - td.center[i_prev][1]
+            t_len = math.hypot(tx, ty) or 1.0
+            nx, ny = -ty / t_len, tx / t_len
+            x1, y1 = cx + nx * cr, cy + ny * cr
+            x2, y2 = cx - nx * cr, cy - ny * cr
+            print(f"[TRACK] CP{cid} projected perpendicular: ({x1:.1f},{y1:.1f}) -> ({x2:.1f},{y2:.1f}) length={2*cr:.1f}cm")
+        else:
+            x1, y1 = cx - cr, cy
+            x2, y2 = cx + cr, cy
+            print(f"[TRACK] CP{cid} horizontal fallback: ({x1:.1f},{y1:.1f}) -> ({x2:.1f},{y2:.1f})")
+        new_cps.append((cid, x1, y1, x2, y2))
+    td.checkpoints = new_cps
+
+
 class TrackData:
     def __init__(self):
         self.center:      list = []
@@ -651,7 +713,7 @@ class TrackData:
             inner=self.inner,
             outer=self.outer,
             checkpoints=[
-                {"id": cp[0], "x": cp[1], "y": cp[2], "r": cp[3]}
+                {"id": cp[0], "x1": cp[1], "y1": cp[2], "x2": cp[3], "y2": cp[4]}
                 for cp in self.checkpoints
             ],
             start_finish=dict(
@@ -710,6 +772,7 @@ def parse_track_csv(csv_text: str) -> TrackData:
         td.checkpoints = _reorder_checkpoints_by_track_path(td, cp_dict)
 
     _stretch_sf_to_track_width(td)
+    _stretch_checkpoints_to_track_width(td)
 
     return td
 
@@ -1156,6 +1219,7 @@ class LapEngine:
         # (outside → inside), so sitting in the zone doesn't re-trigger.
         self._in_sf_zone = False
         self.current_lap_cp_hits: list = []
+        self._in_cp_zones = {}
 
     def arm(self):
         self.admin_armed = True
@@ -1215,6 +1279,7 @@ class LapEngine:
 
     def _clear_active_lap(self):
         """Remove this car's dots from all checkpoint active-lap entries and touch history."""
+        self._in_cp_zones.clear()
         for cp_list in checkpoint_active_lap.values():
             cp_list[:] = [t for t in cp_list if t['car_id'] != self.car_id]
         for cp_list in checkpoint_touch_history.values():
@@ -1224,6 +1289,8 @@ class LapEngine:
         if self.race_finished:
             return None
         if not self.is_racing:
+            if not self.admin_armed:
+                return None
             self.is_racing = True; self.current_lap = 1
             self._lap_start = now; self._cp_touched_this_lap = set()
             self._first_cp_done = False; self._final_cp_done = False
@@ -1292,20 +1359,33 @@ class LapEngine:
             return None
         first_idx = 0
         last_idx  = n - 1
-        # Number of intermediate checkpoints (those strictly between the
-        # first and last). Zero when n <= 2 (e.g. just a first + final CP,
-        # or a single combined CP — see the n == 1 branch below).
         intermediate_total = max(0, n - 2)
 
-        for idx, (cid, cx, cy, cr) in enumerate(CHECKPOINTS):
-            eff_r = max(cr, CP_MIN_RADIUS)
-            dist = math.hypot(x - cx, y - cy)
-            if dist > eff_r:
+        for idx, (cid, x1, y1, x2, y2) in enumerate(CHECKPOINTS):
+            seg_dx = x2 - x1
+            seg_dy = y2 - y1
+            seg_len = math.hypot(seg_dx, seg_dy) or 1.0
+            ux, uy = seg_dx / seg_len, seg_dy / seg_len
+            nx, ny = -uy, ux
+
+            vx, vy = x - x1, y - y1
+            along = vx * ux + vy * uy
+            across = vx * nx + vy * ny
+
+            in_width_band = -20.0 <= along <= (seg_len + 20.0)
+            in_depth_band = abs(across) <= 40.0
+            currently_in = in_width_band and in_depth_band
+
+            if currently_in:
+                if not self._in_cp_zones.get(cid, False):
+                    self._in_cp_zones[cid] = True
+                else:
+                    continue
+            else:
+                self._in_cp_zones[cid] = False
                 continue
 
             if n == 1:
-                # Degenerate single-checkpoint track: it acts as both the
-                # first and final gate combined — one touch satisfies both.
                 if self._first_cp_done:
                     continue
                 self._first_cp_done = True
@@ -1313,37 +1393,31 @@ class LapEngine:
                 hit_kind = 'first+final'
 
             elif idx == first_idx:
-                # GATE 1 — must be the very first thing triggered this lap.
                 if self._first_cp_done:
-                    continue  # already triggered — no re-trigger on re-entry
+                    continue
                 self._first_cp_done = True
                 hit_kind = 'first'
 
             elif idx == last_idx:
-                # GATE 3 — stays INACTIVE (touch is ignored entirely) until
-                # the first checkpoint and every intermediate checkpoint
-                # have already been visited this lap.
                 if not self._first_cp_done or len(self._cp_touched_this_lap) < intermediate_total:
-                    continue  # inactive — physically passing through does nothing
+                    continue
                 if self._final_cp_done:
-                    continue  # already triggered — no re-trigger on re-entry
+                    continue
                 self._final_cp_done = True
                 hit_kind = 'final'
 
             else:
-                # GATE 2 — intermediate checkpoints, order-independent, but
-                # only count once the first-checkpoint gate has opened.
                 if not self._first_cp_done:
-                    continue  # ignore touches before the gate opens
+                    continue
                 if idx in self._cp_touched_this_lap:
-                    continue  # already touched this lap
+                    continue
                 self._cp_touched_this_lap.add(idx)
                 hit_kind = 'intermediate'
 
             self.current_lap_cp_hits.append(idx)
             progress = 1 + len(self._cp_touched_this_lap) + (1 if self._final_cp_done else 0)
             print(f"  ✔ CP{cid} ({hit_kind}) | {self.car_name} @ ({x:.3f},{y:.3f})cm "
-                  f"dist={dist:.1f}cm (r={eff_r:.0f}cm) "
+                  f"across={across:.1f}cm "
                   f"[{progress}/{n}]")
 
             # All-time history (sidebar panel)
@@ -1369,6 +1443,7 @@ class LapEngine:
                         cp_index=cid, total=n,
                         cp_touches=checkpoint_touch_history.get(cid, []),
                         cp_active=checkpoint_active_lap.get(cid, []))
+        return None
         return None
 
     def elapsed(self, now):
@@ -1402,6 +1477,7 @@ class LapEngine:
         self._lap_times.clear(); self._cp_touched_this_lap = set()
         self._first_cp_done = False; self._final_cp_done = False
         self.current_lap_cp_hits = []
+        self._in_cp_zones.clear()
 
 
 # ═══════════════════════════════════════════════════════════════════════

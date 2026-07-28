@@ -777,6 +777,10 @@
       font-weight: 700;
       font-size: 1rem;
       flex: 1;
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .pcard-tag {
@@ -805,21 +809,75 @@
 
     .pcard-timing {
       margin-top: 10px;
-      background: rgba(0, 0, 0, 0.25);
-      border-radius: 7px;
-      padding: 10px 12px;
-      border: 1px solid rgba(255, 255, 255, 0.07);
-    }
-
-    .pcard-timing-row {
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 10px;
+      padding: 10px 10px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
       display: flex;
-      justify-content: space-between;
-      align-items: baseline;
-      margin-bottom: 6px;
+      gap: 8px;
     }
 
-    .pcard-timing-row:last-child {
-      margin-bottom: 0;
+    .pcard-timing-block {
+      flex: 1;
+      min-width: 0;
+      text-align: center;
+      padding: 8px 4px 6px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .pcard-timing-block + .pcard-timing-block {
+      border-left: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .pcard-timing-label-big {
+      font-size: .6rem;
+      letter-spacing: 1.3px;
+      color: rgba(255, 255, 255, 0.42);
+      text-transform: uppercase;
+      font-weight: 700;
+      margin-bottom: 5px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .pcard-timing-value-big {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 1.55rem;
+      font-weight: 800;
+      line-height: 1.15;
+      color: #fff;
+    }
+
+    .pcard-timing-value-big.running {
+      color: var(--accent);
+      text-shadow: 0 0 12px rgba(56, 189, 248, .45);
+    }
+
+    .pcard-timing-value-big.best {
+      color: #ffd700;
+      text-shadow: 0 0 12px rgba(255, 215, 0, .4);
+    }
+
+    .pcard-timing-value-big.no-data {
+      color: rgba(255, 255, 255, 0.25);
+      font-size: 1rem;
+    }
+
+    .pcard-rank {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: .72rem;
+      font-weight: 800;
+      letter-spacing: .5px;
+      color: var(--rc);
+      background: rgba(0, 0, 0, 0.4);
+      border: 1.5px solid var(--rc);
+      border-radius: 20px;
+      padding: 2px 10px;
+      flex-shrink: 0;
+      text-shadow: 0 0 8px var(--rc);
+      white-space: nowrap;
     }
 
     .pcard-timing-label {
@@ -1638,11 +1696,14 @@
     // ═══════════════════════════════════════════════════════════
     // STATE
     // ═══════════════════════════════════════════════════════════
-    let currentGroupId = null, currentGroupStatus = '', currentTotalLaps = 10, currentTrackCSV = '';
+    let currentGroupId = null, currentGroupStatus = '', currentTotalLaps = 10, currentTrackCSV = '', finalStandings = null;
     let currentTournamentId = null;  // resolved from tournament slug, sent with admin_start
     let raceConfig = { total_laps: 10, collision_absorbing_time: null, collision_creating_time: null, object_collision_time: null };
     let liveTrack = { center: [], inner: [], outer: [], checkpoints: [], start_finish: { x1: 460, y1: 300, x2: 460, y2: 340, dir: 'left_to_right' } };
     let players = [], tagData = {}, reassignMode = false, liveLeaderboard = [], packetsThisSec = 0, totalPackets = 0;
+    // ⭐ Persistent per-tag best-lap cache — once a car's best lap is known it is never
+    // lost even if a later leaderboard payload from the server hasn't caught up yet.
+    let tagBestElp = {};
     // carDims[gp_id] = { length, width } in cm — per-car collision size, editable when assigning a tag.
     let carDims = {};
     const CAR_DIM_DEFAULT = { length: CAR_LENGTH_DEFAULT, width: CAR_WIDTH_DEFAULT }; // default length 20cm, width 7cm
@@ -1742,10 +1803,8 @@
       }
       if (liveTrack.checkpoints && liveTrack.checkpoints.length) {
         liveTrack.checkpoints.forEach(cp => {
-          xs.push(cp.x - cp.r);
-          xs.push(cp.x + cp.r);
-          ys.push(cp.y - cp.r);
-          ys.push(cp.y + cp.r);
+          xs.push(cp.x1, cp.x2);
+          ys.push(cp.y1, cp.y2);
         });
       }
       if (liveTrack.start_finish) {
@@ -1941,45 +2000,51 @@
         ctx.closePath(); ctx.fillStyle = 'rgba(255,215,0,0.8)'; ctx.fill(); ctx.restore();
       }
 
-      // Checkpoints
+      // Checkpoints — drawn as a line across the track (same idea as the
+      // S/F gate), matching the backend's line-segment geometry
+      // (id, x1, y1, x2, y2) and its line-crossing detection. Previously
+      // these were drawn as circles with a radius, which no longer
+      // matched the data shape the server actually sends/uses.
       if (liveTrack.checkpoints.length) {
-        liveTrack.checkpoints.forEach((cp, idx) => {
-          const p = tp(cp.x, cp.y);
-          const radiusPx = Math.max(cp.r * cScale, 14);
+        liveTrack.checkpoints.forEach((cp) => {
+          const p1 = tp(cp.x1, cp.y1), p2 = tp(cp.x2, cp.y2);
+          const dx = p2.px - p1.px, dy = p2.py - p1.py;
+          const len = Math.hypot(dx, dy) || 1;
+          const ux = dx / len, uy = dy / len;
+          const midX = (p1.px + p2.px) / 2, midY = (p1.py + p2.py) / 2;
 
-          // Always draw the checkpoint circle in a neutral, quiet style —
+          // Always draw the checkpoint line in a neutral, quiet style —
           // no green glow or fill changes based on hit state.
-          ctx.save();
-          ctx.globalAlpha = 0.18;
-          ctx.fillStyle = '#ffffff';
-          ctx.beginPath(); ctx.arc(p.px, p.py, radiusPx, 0, Math.PI * 2); ctx.fill();
-          ctx.restore();
           ctx.save();
           ctx.setLineDash([4, 3]);
           ctx.strokeStyle = 'rgba(255,255,255,0.30)';
-          ctx.lineWidth = 1.5;
-          ctx.beginPath(); ctx.arc(p.px, p.py, radiusPx, 0, Math.PI * 2); ctx.stroke();
+          ctx.lineWidth = 3;
+          ctx.beginPath(); ctx.moveTo(p1.px, p1.py); ctx.lineTo(p2.px, p2.py); ctx.stroke();
           ctx.setLineDash([]);
           ctx.restore();
+
           ctx.fillStyle = 'rgba(255,255,255,0.5)';
           ctx.font = 'bold 9px JetBrains Mono,monospace'; ctx.textAlign = 'center';
-          ctx.fillText('CP' + cp.id, p.px, p.py + 3);
+          // Offset the label perpendicular to the line so it doesn't sit
+          // on top of the dashed stroke itself.
+          const nx = -uy, ny = ux;
+          ctx.fillText('CP' + cp.id, midX + nx * 12, midY + ny * 12 + 3);
 
-          // Small colored dots on the rim — one per car that has touched
-          // this CP this lap. Resets automatically when their lap completes.
+          // Small colored dots spread along the line — one per car that
+          // has touched this CP this lap. Resets automatically when their
+          // lap completes.
           const activeTouches = cpActiveLap[String(cp.id)] || [];
           if (activeTouches.length > 0) {
             activeTouches.forEach((t, di) => {
               const pIdx = players.findIndex(pl => pl.tag_id !== null && parseInt(pl.tag_id, 10) === t.car_id);
               const col = COLORS[(pIdx >= 0 ? pIdx : t.car_id) % COLORS.length];
-              const angle = (di / activeTouches.length) * Math.PI * 2 - Math.PI / 2;
-              const dx = Math.cos(angle) * (radiusPx + 7);
-              const dy = Math.sin(angle) * (radiusPx + 7);
+              const frac = (di + 1) / (activeTouches.length + 1);
+              const dotX = p1.px + ux * len * frac, dotY = p1.py + uy * len * frac;
               ctx.save();
               ctx.fillStyle = col;
               ctx.shadowColor = col;
               ctx.shadowBlur = 8;
-              ctx.beginPath(); ctx.arc(p.px + dx, p.py + dy, 5, 0, Math.PI * 2); ctx.fill();
+              ctx.beginPath(); ctx.arc(dotX, dotY, 5, 0, Math.PI * 2); ctx.fill();
               ctx.restore();
             });
           }
@@ -2231,8 +2296,23 @@
             document.getElementById('sLaps').textContent = msg.total_laps ?? '—';
             document.getElementById('sGroup').textContent = msg.group_id ?? '—';
             if (msg.feed?.length) appendFeed(msg.feed);
-            if (msg.leaderboard) { liveLeaderboard = msg.leaderboard; renderLeaderboard(); refreshCollisionStats(); }
+            if (msg.leaderboard) {
+              liveLeaderboard = msg.leaderboard;
+              // ⭐ Merge into the persistent cache — never let a stale/partial
+              // server payload erase a best lap we already know about.
+              liveLeaderboard.forEach(lb => {
+                if (lb.best_elp != null && lb.best_elp < 1e9) {
+                  if (tagBestElp[lb.car_id] == null || lb.best_elp < tagBestElp[lb.car_id]) tagBestElp[lb.car_id] = lb.best_elp;
+                }
+              });
+              renderLeaderboard(); refreshCollisionStats();
+            }
             if (msg.cars) {
+              // ⭐ Once the race is finished, stop applying incoming car telemetry
+              // entirely — positions, lap timers, wall/car hit counts, everything —
+              // so nothing keeps moving or climbing on screen until the user
+              // reassigns tags and clicks Restart Race (which resets tagData fresh).
+              if (currentGroupStatus === 'finished') return;
               msg.cars.forEach(car => {
                 const tid = parseInt(car.tag_id, 10); if (isNaN(tid)) return;
                 if (!tagData[tid]) tagData[tid] = { x: 0, y: 0, trail: [], lastTime: 0, speed: 0, lapInfo: null, lapStartTime: null, wallHits: 0, carHits: 0, carDetails: [] };
@@ -2247,15 +2327,21 @@
                 if (car.speed != null) tagData[tid].speed = car.speed;
                 if (car.wall_hits != null) tagData[tid].wallHits = car.wall_hits;
                 if (car.car_collisions != null) tagData[tid].carHits = car.car_collisions;
+                if (car.scoring) tagData[tid].scoring = car.scoring;
                 if (prevR !== car.lap_info?.is_racing) needRender = true;
               });
               refreshDebugBar(); refreshCollisionStats(); if (needRender) renderPlayers();
+              checkRaceCompletion();
             }
             return;
           }
           if (msg.type === 'tag_position') {
             const tid = parseInt(msg.tag_id, 10); if (isNaN(tid)) return;
             rawMonitorIngest(tid, msg);
+            // ⭐ Same freeze as state_update — a finished race must not keep
+            // updating position, lap info, wall hits, or car hits. Only the
+            // reassign + Restart Race flow should bring things moving again.
+            if (currentGroupStatus === 'finished') return;
             if (!tagData[tid]) tagData[tid] = { x: 0, y: 0, heading: 0, isStatic: false, trail: [], lastTime: 0, speed: 0, lapInfo: null, lapStartTime: null, wallHits: 0, carHits: 0, carDetails: [] };
 
             // Store server-filtered position
@@ -2283,11 +2369,22 @@
 
             if (msg.game_events?.length) {
               appendFeed(msg.game_events.map(ev => {
-                if (ev.type === 'lap_done') {
+                if (ev.type === 'lap_done' || ev.type === 'race_finish') {
+                  // ⭐ race_finish carries the exact same payload as lap_done for the
+                  // car's final lap (server just swaps the type) — so it needs the
+                  // same leaderboard auto-push and best-lap recording, not just a
+                  // feed message. Without this, a car's Best Lap would go blank
+                  // once its status flips to Done because none of that logic ran.
+                  const isFinishEv = ev.type === 'race_finish';
+
                   setTimeout(renderLeaderboard, 200);
-                  // ── Auto-push leaderboard to live wall after lap completes ──
-                  // Small delay to let record-lap API finish writing to DB first
-                  setTimeout(() => pushScreen('leaderboard'), 800);
+                  setTimeout(() => {
+                    // ⭐ Call pushScreen directly instead of btn.click() — the button
+                    // gets disabled while a previous push is still in flight, and a
+                    // .click() on a disabled button is a silent no-op. Calling the
+                    // function directly always fires, even back-to-back.
+                    pushScreen('leaderboard');
+                  }, 800);
                   // ── Flash the auto-push badge ──
                   const badge = document.getElementById('lapAutoPushBadge');
                   if (badge) {
@@ -2301,23 +2398,44 @@
                   if (_p && _p.tag_id !== null) {
                     const _t = parseInt(_p.tag_id, 10);
                     if (!isNaN(_t) && tagData[_t]) {
-                      tagData[_t].lapStartTime = Date.now();
-                      if (tagData[_t].lapInfo) { tagData[_t].lapInfo.checkpoints_hit = 0; tagData[_t].lapInfo._cpSet = new Set(); if (tagData[_t].lapInfo.current_lap) tagData[_t].lapInfo.current_lap = ev.lap + 1; }
+                      if (tagData[_t].lapInfo) {
+                        tagData[_t].lapInfo.checkpoints_hit = 0;
+                        tagData[_t].lapInfo._cpSet = new Set();
+                        if (isFinishEv) {
+                          // ⭐ Final lap — mark the car finished instead of starting a new lap
+                          tagData[_t].lapInfo.is_racing = false;
+                          tagData[_t].lapInfo.race_finished = true;
+                        } else {
+                          tagData[_t].lapStartTime = Date.now();
+                          if (tagData[_t].lapInfo.current_lap) tagData[_t].lapInfo.current_lap = ev.lap + 1;
+                        }
+                      }
                       setTimeout(renderPlayers, 10);
                     }
-                    // Clear this car's dots from all checkpoints on lap done
+                    // Clear this car's dots from all checkpoints on lap done/finish
                     Object.keys(cpActiveLap).forEach(cpIdx => {
                       cpActiveLap[cpIdx] = (cpActiveLap[cpIdx] || []).filter(t => t.car_id !== parseInt(_p.tag_id, 10));
                     });
-                    // Clear this car's touches from all checkpoints on lap done
+                    // Clear this car's touches from all checkpoints on lap done/finish
                     Object.keys(cpTouches).forEach(cpIdx => {
                       cpTouches[cpIdx] = (cpTouches[cpIdx] || []).filter(t => t.car_id !== parseInt(_p.tag_id, 10));
                     });
                   }
                   renderCpPanel();
-                  if (ev.elp != null) { const _pid = _p ? parseInt(_p.tag_id, 10) : null; let lb = liveLeaderboard.find(r => r.car_id === _pid); if (!lb) { lb = { car_id: _pid, best_elp: Infinity, best_raw: Infinity, laps_done: 0 }; liveLeaderboard.push(lb); } if (ev.elp < lb.best_elp) lb.best_elp = ev.elp; lb.laps_done = (lb.laps_done || 0) + 1; }
-                  setTimeout(() => { renderLeaderboard(); refreshCollisionStats(); }, 50);
-                  return `LAP  ${_p ? _p.player_name : ev.car_name} #${ev.lap}  ${ev.raw_time?.toFixed(2)}s  ELP:${ev.elp?.toFixed(2)}s`;
+                  if (ev.elp != null) {
+                    const _pid = _p ? parseInt(_p.tag_id, 10) : null;
+                    let lb = liveLeaderboard.find(r => r.car_id === _pid);
+                    if (!lb) { lb = { car_id: _pid, best_elp: Infinity, best_raw: Infinity, laps_done: 0 }; liveLeaderboard.push(lb); }
+                    if (ev.elp < lb.best_elp) lb.best_elp = ev.elp;
+                    lb.laps_done = (lb.laps_done || 0) + 1;
+                    // ⭐ Persist to the sticky cache so the Done card can always show it
+                    if (_pid != null && (tagBestElp[_pid] == null || ev.elp < tagBestElp[_pid])) tagBestElp[_pid] = ev.elp;
+                  }
+                  setTimeout(() => { renderLeaderboard(); renderPlayers(); refreshCollisionStats(); }, 50);
+                  setTimeout(() => { checkRaceCompletion(); }, 1000);
+                  return isFinishEv
+                    ? `FINISH  ${_p ? _p.player_name : ev.car_name}  #${ev.lap}  ${ev.raw_time?.toFixed(2)}s  ELP:${ev.elp?.toFixed(2)}s`
+                    : `LAP  ${_p ? _p.player_name : ev.car_name} #${ev.lap}  ${ev.raw_time?.toFixed(2)}s  ELP:${ev.elp?.toFixed(2)}s`;
                 }
                 if (ev.type === 'lap_void') {
                   const _p = players.find(p => p.tag_id !== null && parseInt(p.tag_id, 10) === ev.car_id);
@@ -2354,11 +2472,8 @@
                   }
                   const _p = players.find(p => p.tag_id !== null && parseInt(p.tag_id, 10) === ev.car_id);
                   if (_p && _p.tag_id !== null) { const _t = parseInt(_p.tag_id, 10); if (!isNaN(_t) && tagData[_t]?.lapInfo) { if (!tagData[_t].lapInfo._cpSet) tagData[_t].lapInfo._cpSet = new Set(); tagData[_t].lapInfo._cpSet.add(ev.cp_index); tagData[_t].lapInfo.checkpoints_hit = tagData[_t].lapInfo._cpSet.size; } }
+                  setTimeout(renderPlayers, 10);
                   return `CP${ev.cp_index}  ${_p ? _p.player_name : ev.car_name}`;
-                }
-                if (ev.type === 'race_finish') {
-                  const _p = players.find(p => p.tag_id !== null && parseInt(p.tag_id, 10) === ev.car_id);
-                  return `FINISH  ${_p ? _p.player_name : ev.car_name}`;
                 }
                 if (ev.type === 'wall') {
                   const _p = players.find(p => p.tag_id !== null && parseInt(p.tag_id, 10) === ev.car_id);
@@ -2443,6 +2558,33 @@
       };
     }
 
+    // Mirrors the bridge's _stretch_checkpoints_to_track_width: turns each
+    // CSV checkpoint circle (x, y, r) into a full line segment across the
+    // track — inner boundary to outer boundary where those are available,
+    // falling back to a center-tangent perpendicular segment, and finally
+    // to a flat horizontal segment. This keeps the local admin preview
+    // consistent with what the server actually uses for line-crossing
+    // detection (checkpoints are lines, like the S/F gate — not circles).
+    function stretchCheckpointsToTrackWidth(cpList, center, inner, outer) {
+      return cpList.map(cp => {
+        const innerPt = _nearestPt(inner, cp.x, cp.y);
+        const outerPt = _nearestPt(outer, cp.x, cp.y);
+        if (innerPt && outerPt) {
+          return { id: cp.id, x1: innerPt[0], y1: innerPt[1], x2: outerPt[0], y2: outerPt[1] };
+        }
+        if (center && center.length >= 2) {
+          let bestI = 0, bestD = Infinity;
+          center.forEach((c, i) => { const d = (c[0] - cp.x) ** 2 + (c[1] - cp.y) ** 2; if (d < bestD) { bestD = d; bestI = i; } });
+          const n = center.length, iNext = (bestI + 1) % n, iPrev = (bestI - 1 + n) % n;
+          const tx = center[iNext][0] - center[iPrev][0], ty = center[iNext][1] - center[iPrev][1];
+          const tLen = Math.hypot(tx, ty) || 1;
+          const nx = -ty / tLen, ny = tx / tLen;
+          return { id: cp.id, x1: cp.x + nx * cp.r, y1: cp.y + ny * cp.r, x2: cp.x - nx * cp.r, y2: cp.y - ny * cp.r };
+        }
+        return { id: cp.id, x1: cp.x - cp.r, y1: cp.y, x2: cp.x + cp.r, y2: cp.y };
+      });
+    }
+
     function parseCsvIntoLiveTrack(csvText) {
       if (!csvText || !csvText.trim()) return;
       const center = [], inner = [], outer = [], cpMap = {}; let sf = null;
@@ -2459,7 +2601,8 @@
       }
       if (center.length > 2) liveTrack.center = center; if (inner.length > 2) liveTrack.inner = inner; if (outer.length > 2) liveTrack.outer = outer;
       if (sf) liveTrack.start_finish = stretchSfToTrackWidth(sf, inner, outer);
-      const ids = Object.keys(cpMap).map(Number).sort((a, b) => a - b); if (ids.length) liveTrack.checkpoints = ids.map(i => cpMap[i]);
+      const ids = Object.keys(cpMap).map(Number).sort((a, b) => a - b);
+      if (ids.length) liveTrack.checkpoints = stretchCheckpointsToTrackWidth(ids.map(i => cpMap[i]), center, inner, outer);
       refreshDebugBar();
       calcLayout();
     }
@@ -2470,11 +2613,16 @@
       let ctr = n(td.center), inn = n(td.inner), out = n(td.outer);
       if (ctr.length > 2) liveTrack.center = ctr; if (inn.length > 2) liveTrack.inner = inn; if (out.length > 2) liveTrack.outer = out;
       if (td.checkpoints && td.checkpoints.length) {
+        // Server sends checkpoints as line segments {id, x1, y1, x2, y2}
+        // (see TrackData.to_dict in ws_bridge.py) — a checkpoint is a full
+        // line across the track, crossed the same way as the S/F line,
+        // not a circle with a radius.
         liveTrack.checkpoints = td.checkpoints.map(cp => ({
           id: cp.id,
-          x: cp.x,
-          y: cp.y,
-          r: cp.r
+          x1: cp.x1,
+          y1: cp.y1,
+          x2: cp.x2,
+          y2: cp.y2
         }));
       }
       if (td.start_finish) {
@@ -2506,13 +2654,24 @@
     }, 1000);
 
     setInterval(() => {
+      // ⭐ Once the race is finished, the live per-lap timer must not keep
+      // ticking (and the label shouldn't keep relabeling laps) — freeze
+      // display here too, on top of freezing the telemetry itself, so a
+      // stray stale is_racing flag can never make the clock run again.
+      if (currentGroupStatus === 'finished') return;
       const now = Date.now();
       players.forEach(p => {
         const tid = parseInt(p.tag_id, 10); if (isNaN(tid)) return; const d = tagData[tid]; if (!d) return;
         const te = document.querySelector(`.lap-timer[data-tag="${tid}"]`);
         if (te && d.lapStartTime && d.lapInfo?.is_racing) { const el = Math.max(0, (now - d.lapStartTime) / 1000), m = Math.floor(el / 60), s = (el % 60).toFixed(2).padStart(5, '0'); te.textContent = m > 0 ? `${m}:${s}` : s; }
         const be = document.getElementById(`best-${tid}`);
-        if (be) { const lb = liveLeaderboard.find(r => r.car_id === tid), bestElp = (lb && lb.best_elp < 1e9) ? lb.best_elp : null; if (bestElp != null) { be.textContent = fmtLapTime(bestElp); be.className = 'pcard-timing-value best'; } }
+        if (be) { const lb = liveLeaderboard.find(r => r.car_id === tid); let bestElp = (lb && lb.best_elp < 1e9) ? lb.best_elp : null; if (bestElp == null && tagBestElp[tid] != null) bestElp = tagBestElp[tid]; if (bestElp != null) { be.textContent = fmtLapTime(bestElp); be.className = 'pcard-timing-value-big best'; } }
+        const le = document.getElementById(`lap-label-${tid}`);
+        if (le && d.lapInfo) {
+          const curLap = d.lapInfo.current_lap || 1;
+          const totLaps = d.lapInfo.total_laps || currentTotalLaps;
+          le.textContent = `Lap ${curLap}/${totLaps} · Current`;
+        }
       });
     }, 100);
 
@@ -2684,6 +2843,7 @@
     }
 
     async function selectGroup() {
+      finalStandings = null;
       const gSel = document.getElementById('gSel'); currentGroupId = gSel.value || null; reassignMode = false;
       if (!currentGroupId) { players = []; currentGroupStatus = ''; setBadge(''); updateButtons(); renderPlayers(); return; }
       const opt = gSel.options[gSel.selectedIndex]; currentGroupStatus = opt.dataset.status || '';
@@ -2764,6 +2924,7 @@
 
     async function doFinish() {
       if (!currentGroupId) return; if (!confirm('Mark race as finished?')) return;
+      calculateFinalStandings();
       const res = await apiPatch(API.markFinish, { group_id: currentGroupId }); if (!res.success) { alert('Failed'); return; }
       currentGroupStatus = 'finished'; setBadge('finished');
       const gSelEl = document.getElementById('gSel');
@@ -2775,9 +2936,17 @@
           isFinal = opt.dataset.is_final === 'true';
         }
       }
-      sendWS({ type: 'reset' }); appendFeed(['⏹ Race finished']);
+      // ⭐ Do NOT send {type:'reset'} here, and do NOT clear liveLeaderboard /
+      // tagBestElp / flip into reassignMode here. Sending 'reset' wipes the
+      // backend's ScoringEngine history immediately (see ws_bridge.py
+      // race_mgr.reset() → scoring.reset()), and clearing the client caches
+      // erases Best Lap times and final positions the instant the race ends.
+      // That data must stay visible until the admin actually starts the next
+      // race — the only place a reset should happen is confirmTagsAndRestart(),
+      // once tags have been reassigned for a new race.
+      appendFeed(['⏹ Race finished']);
       Object.keys(tagData).forEach(tid => { tagData[tid].trail = []; tagData[tid].lapInfo = null; tagData[tid].lapStartTime = null; });
-      liveLeaderboard = []; cpTouches = {}; renderLeaderboard(); renderCpPanel(); refreshCollisionStats(); resetAllEma(); reassignMode = true; updateButtons(); renderPlayers();
+      cpTouches = {}; renderLeaderboard(); renderCpPanel(); refreshCollisionStats(); resetAllEma(); updateButtons(); renderPlayers();
 
       // 1. Immediately push qualify screen
       await pushScreen('qualify');
@@ -2929,6 +3098,7 @@
         tagData[tid].carDetails   = [];
       });
       liveLeaderboard = [];
+      tagBestElp = {};
       refreshCollisionStats();   // redraws cs_wall / cs_car / cs_pen / cs_bon → all 0
       renderLeaderboard();       // clears leaderboard table
       appendFeed(['▶ Race restarted — tags reassigned, track reloaded, LIVE']);
@@ -2954,13 +3124,56 @@
       if (!players.length) { wrap.innerHTML = '<p class="ph">No players in this group</p>'; return; }
       const editable = canEditTags(), now = Date.now();
       const banner = reassignMode ? `<div style="background:rgba(255,215,0,.1);border:1px solid rgba(255,215,0,.3);border-radius:6px;padding:8px 10px;margin-bottom:10px;font-size:.78rem;color:var(--yellow);font-weight:600;">↺ Reassign tags, then click <strong>▶ Restart Race</strong></div>` : '';
-      wrap.innerHTML = banner + renderCards(editable, now);
+      
+      // Show ONE of: Final Race Standings, or the live/editable player
+      // cards — never both. Previously both were concatenated whenever a
+      // group was finished, so every driver's name appeared twice (once
+      // as a standings entry, once as a card) unless the admin was
+      // actively reassigning tags, in which case cards still need to show
+      // so tags can be edited before Restart Race.
+      let html = '';
+      const showStandings = currentGroupStatus === 'finished' && finalStandings && !reassignMode;
+      if (showStandings) {
+        html += renderFinalStandings();
+      } else {
+        html += banner + renderCards(editable, now);
+      }
+      wrap.innerHTML = html;
     }
 
     function renderCards(editable, now) {
+      // ── Rank every driver by best lap time (fastest = P1) ──────────────
+      // This mirrors the backend's own ranking rule exactly:
+      // ws_bridge.py's ScoringEngine.get_leaderboard() sorts by
+      // (best_elp, best_lap) ascending — elp already has penalties added
+      // and bonuses subtracted, so this is "best lap after penalties".
+      // We re-sort defensively client-side rather than trusting array
+      // order, so the sidebar's rank badge can never drift out of sync
+      // with what "best lap time" actually means even if the payload's
+      // order ever changes upstream.
+      const sortedForRank = [...liveLeaderboard]
+        .filter(r => r.best_elp != null && r.best_elp < 1e9)
+        .sort((a, b) => a.best_elp - b.best_elp || a.best_lap - b.best_lap);
+      const rankByCarId = {};
+      sortedForRank.forEach((r, i) => { rankByCarId[r.car_id] = i + 1; });
+      const RANK_COLORS = ['#ffd700', '#c0c0c0', '#cd7f32'];
+      const RANK_LABELS = { 1: '1st', 2: '2nd', 3: '3rd', 4: '4th' };
+
       return players.map((p, idx) => {
         const color = COLORS[idx % COLORS.length], tid = parseInt(p.tag_id, 10), d = !isNaN(tid) ? tagData[tid] : null;
         const fresh = d && (now - d.lastTime) < 4000, racing = currentGroupStatus === 'live' && !reassignMode && fresh;
+
+        // Rank badge — shown whenever this driver has at least one valid
+        // lap recorded, regardless of whether they're currently racing,
+        // waiting, or finished (matches backend: ranking is based on
+        // history, not live status).
+        const rank = !isNaN(tid) ? rankByCarId[tid] : undefined;
+        const rankColor = rank ? (RANK_COLORS[rank - 1] || 'rgba(255,255,255,.55)') : null;
+        const rankLabel = rank ? (RANK_LABELS[rank] || `${rank}th`) : null;
+        const rankBadge = rank
+          ? `<span class="pcard-rank" style="--rc:${rankColor}">🏁 ${rankLabel}</span>`
+          : '';
+
         let posLine = '';
         if (racing && d) posLine = `<div class="pcard-pos" id="ppos-${tid}">x:${d.x.toFixed(1)} y:${d.y.toFixed(1)} cm · ${(d.speed || 0).toFixed(1)} km/h</div>`;
         else if (currentGroupStatus === 'live' && !reassignMode && !isNaN(tid)) posLine = `<div class="pcard-sub" style="color:#fbbf24">Waiting for signal…</div>`;
@@ -2988,7 +3201,9 @@
         let lapLine = '';
         if (d?.lapInfo?.is_racing) {
           const li = d.lapInfo, cpHit = li.checkpoints_hit || 0, cpTotal = li.checkpoints_total || CHECKPOINTS_REQUIRED;
-          const lb = liveLeaderboard.find(r => r.car_id === tid), bestElp = (lb && lb.best_elp < 1e9) ? lb.best_elp : null;
+          const lb = liveLeaderboard.find(r => r.car_id === tid);
+          let bestElp = (lb && lb.best_elp < 1e9) ? lb.best_elp : null;
+          if (bestElp == null && tagBestElp[tid] != null) bestElp = tagBestElp[tid];
           const penTot = lb?.penalty_total ?? 0, bonTot = lb?.bonus_total ?? 0;
           let colRow = '';
           if (wH > 0 || cH > 0 || penTot > 0 || bonTot > 0 || colOppList.length > 0) {
@@ -3012,9 +3227,25 @@
           const cpPips = Array.from({ length: cpTotal }, (_, i) => { const done = i < cpHit, next = i === cpHit, col = done ? '#00ff88' : (next ? '#ffd700' : 'rgba(255,255,255,0.12)'), brd = done ? '#00ff88' : (next ? '#ffd700' : 'rgba(255,255,255,0.2)'); return `<span title="CP${i}" style="display:inline-block;width:11px;height:11px;border-radius:50%;background:${col};border:1.5px solid ${brd};transition:background .3s;"></span>`; }).join('');
           const cpColor = cpHit >= cpTotal ? '#00ff88' : (cpHit > 0 ? '#ffd700' : 'rgba(255,255,255,0.35)');
           const cpTagLabel = `Tag ${!isNaN(tid) ? tid : '?'} — ${cpHit}/${cpTotal} checkpoint${cpTotal !== 1 ? 's' : ''}`;
-          lapLine = `<div class="pcard-timing"><div class="pcard-timing-row"><span class="pcard-timing-label">LAP ${li.current_lap} / ${li.total_laps}</span><span class="pcard-timing-label" style="color:rgba(255,255,255,.4)">CURRENT</span></div><div class="pcard-timing-row"><span class="pcard-timing-value running lap-timer" data-tag="${tid}">0.00</span></div><div class="pcard-timing-row" style="margin-top:5px;padding-top:5px;border-top:1px solid rgba(255,255,255,.06)"><span class="pcard-timing-label">BEST LAP</span>${bestElp != null ? `<span class="pcard-timing-value best" id="best-${tid}">${fmtLapTime(bestElp)}</span>` : `<span class="pcard-timing-value no-data" id="best-${tid}">—</span>`}</div><div class="pcard-cp-row"><span style="font-size:.65rem;letter-spacing:1px;color:rgba(255,255,255,.6);margin-right:4px;font-weight:700;">CP</span>${cpPips}<span style="font-size:.68rem;color:${cpHit >= cpTotal ? '#00ff88' : 'rgba(255,255,255,.6)'};margin-left:4px;font-weight:700;">${cpHit}/${cpTotal}</span></div><div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,.06);font-family:'JetBrains Mono',monospace;font-size:.72rem;font-weight:700;color:${cpColor};letter-spacing:.3px;">${cpTagLabel}${cpHit >= cpTotal ? ' ✓' : ''}</div>${colRow}</div>`;
-        } else if (d?.lapInfo?.race_finished) {
-          const lb = liveLeaderboard.find(r => r.car_id === tid), bestElp = (lb && lb.best_elp < 1e9) ? lb.best_elp : null;
+          // Seed the timer with the real current elapsed time (same formula
+          // as the 100ms interval that keeps it ticking) rather than a
+          // hardcoded "0.00" — this element is torn down and rebuilt on
+          // every card re-render, so hardcoding 0.00 here made the visible
+          // timer reset/jump each time until the interval caught back up.
+          const elNow = (d?.lapStartTime && li.is_racing) ? Math.max(0, (now - d.lapStartTime) / 1000) : 0;
+          const elNowM = Math.floor(elNow / 60), elNowS = (elNow % 60).toFixed(2).padStart(5, '0');
+          const elNowStr = elNowM > 0 ? `${elNowM}:${elNowS}` : elNowS;
+          lapLine = `<div class="pcard-timing"><div class="pcard-timing-block"><div class="pcard-timing-label-big" id="lap-label-${tid}">Lap ${li.current_lap}/${li.total_laps} · Current</div><div class="pcard-timing-value-big running lap-timer" data-tag="${tid}">${elNowStr}</div></div><div class="pcard-timing-block"><div class="pcard-timing-label-big">Best Lap${penTot > 0 || bonTot > 0 ? ' (net)' : ''}</div><div class="pcard-timing-value-big ${bestElp != null ? 'best' : 'no-data'}" id="best-${tid}">${bestElp != null ? fmtLapTime(bestElp) : '—'}</div></div></div><div class="pcard-cp-row">${''}<span style="font-size:.65rem;letter-spacing:1px;color:rgba(255,255,255,.6);margin-right:4px;font-weight:700;">CP</span>${cpPips}<span style="font-size:.68rem;color:${cpHit >= cpTotal ? '#00ff88' : 'rgba(255,255,255,.6)'};margin-left:4px;font-weight:700;">${cpHit}/${cpTotal}</span></div><div id="cp-label-${tid}" style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,.06);font-family:'JetBrains Mono',monospace;font-size:.72rem;font-weight:700;color:${cpColor};letter-spacing:.3px;">${cpTagLabel}${cpHit >= cpTotal ? ' ✓' : ''}</div>${colRow}</div>`;
+        } else if (d?.lapInfo?.race_finished || (currentGroupStatus === 'finished' && !isNaN(tid))) {
+          const lb = liveLeaderboard.find(r => r.car_id === tid);
+          let bestElp = (lb && lb.best_elp < 1e9) ? lb.best_elp : null;
+          if (bestElp === null && d?.scoring?.best_elp && d.scoring.best_elp < 1e9) {
+            bestElp = d.scoring.best_elp;
+          }
+          // ⭐ Final fallback — the sticky cache is set the instant the finishing
+          // lap event lands, so Best Lap is never blank once a car is Done, even
+          // if the server's leaderboard/scoring payload hasn't caught up yet.
+          if (bestElp === null && tagBestElp[tid] != null) bestElp = tagBestElp[tid];
           let colRow = '';
           if (wH > 0 || cH > 0 || colOppList.length > 0) {
             colRow = '<div class="col-detail-box">';
@@ -3023,7 +3254,7 @@
             else if (cH > 0) colRow += `<div class="col-detail-row car">💥 Car Hits: <strong>${cH}</strong></div>`;
             colRow += '</div>';
           }
-          lapLine = `<div class="pcard-timing"><div class="pcard-timing-row"><span class="pcard-timing-label">FINISHED</span><span style="font-size:.8rem">🏆</span></div>${bestElp != null ? `<div class="pcard-timing-row"><span class="pcard-timing-label">BEST LAP</span><span class="pcard-timing-value best">${fmtLapTime(bestElp)}</span></div>` : ''} ${colRow}</div>`;
+          lapLine = `<div class="pcard-timing"><div class="pcard-timing-block" style="flex:0 0 auto;padding-left:10px;padding-right:10px;"><div class="pcard-timing-label-big">Status</div><div class="pcard-timing-value-big" style="font-size:1.1rem;">🏆 Done</div></div>${bestElp != null ? `<div class="pcard-timing-block"><div class="pcard-timing-label-big">Best Lap</div><div class="pcard-timing-value-big best">${fmtLapTime(bestElp)}</div></div>` : ''}</div>${colRow}`;
         } else if (wH > 0 || cH > 0 || colOppList.length > 0) {
           let colRow = '<div class="col-detail-box">';
           if (wH > 0) colRow += `<div class="col-detail-row wall">🚧 Wall Hits: <strong>${wH}</strong></div>`;
@@ -3034,7 +3265,7 @@
         }
         const dim = getCarDim(p.gp_id);
         const tagInput = editable ? `<div class="tag-row"><input class="tag-inp" type="text" value="${!isNaN(tid) ? tid : ''}" placeholder="Tag ID (number)" data-gp="${p.gp_id}" onblur="saveTag(this)" onkeydown="if(event.key==='Enter'){event.preventDefault();saveTag(this)}"/><div class="tag-hint" id="hint-${p.gp_id}"></div><div class="dim-row"><div class="dim-field"><label>L</label><input class="dim-inp" type="number" min="1" step="0.5" value="${dim.length}" data-gp="${p.gp_id}" data-axis="length" onblur="saveDim(this)"/></div><div class="dim-field"><label>W</label><input class="dim-inp" type="number" min="1" step="0.5" value="${dim.width}" data-gp="${p.gp_id}" data-axis="width" onblur="saveDim(this)"/></div></div></div>` : '';
-        return `<div class="pcard ${racing ? 'active pulse' : ''}" style="--cc:${color}"><div class="pcard-hdr"><div class="pcard-dot"></div><div class="pcard-name">${p.player_name}</div>${!isNaN(tid) ? `<span class="pcard-tag">#${tid}</span>` : ''}</div><div class="pcard-sub">${p.player_status || ''}</div>${posLine}${lapLine}${tagInput}</div>`;
+        return `<div class="pcard ${racing ? 'active pulse' : ''}" style="--cc:${color}"><div class="pcard-hdr"><div class="pcard-dot"></div><div class="pcard-name">${p.player_name}</div>${rankBadge}${!isNaN(tid) ? `<span class="pcard-tag">#${tid}</span>` : ''}</div><div class="pcard-sub">${p.player_status || ''}</div>${posLine}${lapLine}${tagInput}</div>`;
       }).join('');
     }
 
@@ -3072,6 +3303,232 @@
       if (player && player.tag_id !== null && player.tag_id !== undefined) {
         sendWS({ type: 'update_car_dims', dims: { [String(player.tag_id)]: { length: next.length, width: next.width } } });
       }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // AUTOMATIC RACE COMPLETION & FINAL STANDINGS
+    // ═══════════════════════════════════════════════════════════
+
+    function checkRaceCompletion() {
+      if (currentGroupStatus !== 'live' || reassignMode) return;
+      const activePlayers = players.filter(p => p.tag_id !== null && p.tag_id !== undefined);
+      if (activePlayers.length === 0) return;
+      
+      const allFinished = activePlayers.every(p => {
+        const tid = parseInt(p.tag_id, 10);
+        const d = tagData[tid];
+        const finished = d?.lapInfo?.race_finished || (d?.scoring?.laps_done >= currentTotalLaps);
+        return !!finished;
+      });
+
+      if (allFinished) {
+        console.log('[XRace] All active tags completed their laps. Auto-finishing race.');
+        autoFinishRace();
+      }
+    }
+
+    function calculateFinalStandings() {
+      // ── Rank by BEST LAP TIME (after that lap's own penalties/bonuses), ──
+      // never by summed total race time. This mirrors ws_bridge.py's
+      // ScoringEngine.get_leaderboard(), which picks each car's fastest
+      // non-voided lap via min(l.elp) and sorts rows by (best_elp, best_lap).
+      // liveLeaderboard is that exact server payload, and it's the same
+      // source renderCards()/renderLeaderboard() already rank the live
+      // sidebar by — using it here too is what keeps the sidebar and the
+      // Final Race Standings screen showing identical ranks and times.
+      const activePlayers = players.filter(p => p.tag_id !== null && p.tag_id !== undefined);
+      const standings = activePlayers.map(p => {
+        const tid = parseInt(p.tag_id, 10);
+        const d = tagData[tid];
+        const lb = liveLeaderboard.find(r => r.car_id === tid);
+        const history = (d?.scoring?.history || []).filter(l => !l.voided);
+
+        let bestElp = null, bestRaw = null, bestPenalty = 0, bestBonus = 0, bestLapNumber = null;
+
+        if (lb && lb.best_elp != null && lb.best_elp < 1e9) {
+          // Authoritative server value — same as what the sidebar ranks by.
+          bestElp = lb.best_elp;
+          bestRaw = lb.best_raw;
+          bestLapNumber = lb.best_lap;
+          // Pull the exact per-lap penalty/bonus breakdown for that specific
+          // best lap (not the race-wide penalty_total) so we can show what
+          // was actually applied to the lap that won them their rank.
+          const rec = history.find(l => l.lap === bestLapNumber) ||
+            history.reduce((best, l) => (best == null || l.elp < best.elp) ? l : best, null);
+          if (rec) { bestPenalty = rec.penalty || 0; bestBonus = rec.bonus || 0; }
+          else { bestPenalty = Math.max(0, bestElp - bestRaw); }
+        } else if (history.length) {
+          // Fallback: server leaderboard row not available — derive the best
+          // lap directly from this car's own lap history the same way the
+          // server does (minimum elp among non-voided laps).
+          const rec = history.reduce((best, l) => (l.elp < best.elp) ? l : best, history[0]);
+          bestElp = rec.elp; bestRaw = rec.raw; bestPenalty = rec.penalty || 0; bestBonus = rec.bonus || 0; bestLapNumber = rec.lap;
+        } else if (tagBestElp[tid] != null) {
+          // Last-resort sticky cache — no per-lap breakdown available.
+          bestElp = tagBestElp[tid]; bestRaw = tagBestElp[tid];
+        }
+
+        const lapsDone = d?.scoring?.laps_done ?? lb?.laps_done ?? history.length;
+
+        return {
+          player: p,
+          tagId: tid,
+          bestRaw,
+          bestPenalty,
+          bestBonus,
+          bestElp,
+          bestLapNumber,
+          lapsDone,
+          wallHits: d?.wallHits || 0,
+          carHits: d?.carHits || 0
+        };
+      });
+
+      standings.sort((a, b) => {
+        const aHas = a.bestElp != null, bHas = b.bestElp != null;
+        if (aHas !== bHas) return aHas ? -1 : 1;        // players with a valid lap always outrank DNFs
+        if (!aHas) return (b.lapsDone || 0) - (a.lapsDone || 0); // both DNF — more laps first
+        return a.bestElp - b.bestElp || (a.bestLapNumber || 0) - (b.bestLapNumber || 0);
+      });
+
+      finalStandings = standings;
+      return standings;
+    }
+
+    async function autoFinishRace() {
+      if (!currentGroupId) return;
+      
+      calculateFinalStandings();
+      
+      try {
+        const res = await apiPatch(API.markFinish, { group_id: currentGroupId });
+        if (!res.success) {
+          console.warn('[AutoFinish] Failed to patch group status finished.');
+        }
+      } catch (e) {
+        console.error('[AutoFinish] API Error:', e);
+      }
+
+      currentGroupStatus = 'finished';
+      setBadge('finished');
+
+      const gSelEl = document.getElementById('gSel');
+      let isFinal = false;
+      if (gSelEl && gSelEl.selectedIndex >= 0) {
+        const opt = gSelEl.options[gSelEl.selectedIndex];
+        if (opt) {
+          opt.dataset.status = 'finished';
+          opt.textContent = opt.textContent.replace(/\s*\[.*?\]\s*$/, '') + ' [finished]';
+          isFinal = opt.dataset.is_final === 'true';
+        }
+      }
+
+      // ⭐ Do NOT send {type:'reset'} here, and do NOT clear liveLeaderboard /
+      // tagBestElp / flip into reassignMode here — see the matching note in
+      // doFinish(). A reset here would wipe the backend's ScoringEngine
+      // history and erase Best Lap/rank data the moment the race auto-finishes.
+      // That reset only belongs in confirmTagsAndRestart(), once the admin has
+      // reassigned tags for the next race.
+      appendFeed(['🏆 Race automatically finished — Standings calculated']);
+
+      Object.keys(tagData).forEach(tid => {
+        tagData[tid].trail = [];
+        tagData[tid].lapInfo = null;
+        tagData[tid].lapStartTime = null;
+      });
+      cpTouches = {};
+      
+      renderLeaderboard();
+      renderCpPanel();
+      refreshCollisionStats();
+      resetAllEma();
+      
+      updateButtons();
+      renderPlayers();
+
+      await pushScreen('qualify');
+      if (isFinal) {
+        setTimeout(async () => {
+          if (currentGroupStatus === 'finished') {
+            await pushScreen('standing');
+          }
+        }, 8000);
+      }
+    }
+
+    function renderFinalStandings() {
+      if (!finalStandings || !finalStandings.length) return '';
+      
+      const RANK_COLORS = ['#ffd700', '#c0c0c0', '#cd7f32'];
+      const RANK_BADGES = ['🥇 1st', '🥈 2nd', '🥉 3rd'];
+      
+      let html = `<div style="margin-bottom: 20px;">
+        <div style="font-size: 1.1rem; font-weight: 700; color: #ffd700; text-transform: uppercase; letter-spacing: 2.5px; margin-bottom: 15px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid rgba(255,215,0,0.25); padding-bottom: 8px;">
+          🏆 Final Race Standings
+        </div>`;
+        
+      html += finalStandings.map((entry, idx) => {
+        const hasTime = entry.bestElp != null;
+        const isWinner = idx === 0 && hasTime;
+        const rankColor = hasTime ? (RANK_COLORS[idx] || '#94a3b8') : '#64748b';
+        const rankLabel = !hasTime ? 'DNF' : (idx < 3 ? RANK_BADGES[idx] : `${idx + 1}th`);
+        const playerColor = COLORS[players.indexOf(entry.player) % COLORS.length];
+        
+        // Net penalty applied specifically to this player's *best* lap —
+        // not the sum of penalties across every lap of the race.
+        const netPen = (entry.bestPenalty || 0) - (entry.bestBonus || 0);
+        const rawStr = entry.bestRaw != null ? fmtLapTime(entry.bestRaw) : '—';
+        const penStr = !hasTime ? '—' : (netPen === 0 ? '—' : (netPen > 0 ? `+${netPen.toFixed(2)}s` : `${netPen.toFixed(2)}s`));
+        const bestStr = hasTime ? fmtLapTime(entry.bestElp) : '—';
+        
+        const cardBg = isWinner 
+          ? 'linear-gradient(135deg, rgba(255, 215, 0, 0.12) 0%, rgba(17, 24, 39, 0.95) 100%)' 
+          : 'rgba(17, 24, 39, 0.75)';
+        const cardBorder = isWinner
+          ? '2px solid #ffd700'
+          : '1px solid rgba(255, 255, 255, 0.06)';
+        const shadow = isWinner
+          ? 'box-shadow: 0 0 20px rgba(255, 215, 0, 0.25);'
+          : '';
+          
+        return `
+          <div class="pcard" style="background: ${cardBg}; border: ${cardBorder}; ${shadow} margin-bottom: 12px; padding: 14px; position: relative;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; font-weight: 800; color: ${rankColor}; text-transform: uppercase; background: rgba(0,0,0,0.35); padding: 2px 8px; border-radius: 12px; border: 1px solid ${rankColor}33;">
+                ${rankLabel}
+              </span>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; color: #64748b; background: rgba(0,0,0,0.25); padding: 1px 6px; border-radius: 4px;">
+                Tag #${entry.tagId}${entry.bestLapNumber ? ` · Lap ${entry.bestLapNumber}` : ''}
+              </span>
+            </div>
+            
+            <div style="font-size: 1.1rem; font-weight: 700; color: ${playerColor}; margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">
+              ${isWinner ? '👑 ' : ''}${entry.player.player_name}
+            </div>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; color: #94a3b8; background: rgba(0,0,0,0.35); padding: 8px; border-radius: 6px;">
+              <div>
+                <div style="color: #64748b; font-size: 0.58rem; text-transform: uppercase; margin-bottom: 2px;">Best Lap (Raw)</div>
+                <div style="color: #fff; font-size: 0.82rem; font-weight: 600;">${rawStr}</div>
+              </div>
+              <div>
+                <div style="color: #64748b; font-size: 0.58rem; text-transform: uppercase; margin-bottom: 2px;">Lap Penalty</div>
+                <div style="color: ${netPen > 0 ? '#ff3b5c' : (netPen < 0 ? '#00ff88' : '#94a3b8')}; font-size: 0.82rem; font-weight: 600;">${penStr}</div>
+              </div>
+            </div>
+            
+            <div style="margin-top: 10px; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 8px;">
+              <span style="font-size: 0.72rem; color: #cbd5e1; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Effective Best Lap:</span>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 1.2rem; font-weight: 800; color: ${isWinner ? '#ffd700' : '#fff'}; text-shadow: ${isWinner ? '0 0 8px rgba(255,215,0,0.4)' : 'none'};">
+                ${bestStr}
+              </span>
+            </div>
+          </div>
+        `;
+      }).join('');
+      
+      html += `</div>`;
+      return html;
     }
 
     // ═══════════════════════════════════════════════════════════
