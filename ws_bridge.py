@@ -299,7 +299,7 @@ current_tournament_id:  int | None = None   # set from admin_start payload
 CORNER_CUT_PENALTY         = 3.0
 CORNER_CUT_VOID_LAP        = False
 CAR_COLLISION_DISTANCE_M   = 25.0   # fallback centre-to-centre pre-check
-CAR_COLLISION_COOLDOWN     = 5.0   # seconds — min gap between same-pair collisions
+CAR_COLLISION_COOLDOWN     = 3.0   # seconds — min gap between same-pair collisions
 
 # Physical car dimensions in CENTIMETRES (F1-style RC car, tag at centre).
 # These are now just the FALLBACK/DEFAULT dimensions used when a car hasn't
