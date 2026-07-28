@@ -306,7 +306,7 @@ CAR_COLLISION_COOLDOWN     = 5.0   # seconds — min gap between same-pair colli
 # been assigned its own length/width (see CollisionEngine.set_car_dims /
 # CAR_DIMS_DEFAULT below) — per-car dims from the tag-assignment UI take
 # priority and are used to compute each car's own collision rectangle.
-CAR_LENGTH_CM = 30.0   # default car length in cm (30cm)
+CAR_LENGTH_CM = 40.0   # default car length in cm (30cm)
 CAR_WIDTH_CM  = 15.0    # default car width in cm (15cm)
 CAR_DIMS_DEFAULT = (CAR_LENGTH_CM, CAR_WIDTH_CM)
 SPEED_DIFF_THRESHOLD       = 10.0
@@ -1296,6 +1296,14 @@ class LapEngine:
             self._first_cp_done = False; self._final_cp_done = False
             self.current_lap_cp_hits = []
             self._clear_active_lap()
+            # Zero out any speed accumulated before the race actually started
+            # (car handling/positioning while armed but not yet racing, or
+            # leftover motion from a previous race) so Lap 1's top speed only
+            # reflects genuine on-track motion — mirrors the reset close_lap()
+            # already applies at the start of every subsequent lap.
+            tag_state = tags.get(self.car_id)
+            if tag_state:
+                tag_state.max_speed_ms = 0.0
             self.scoring.open_lap(self.car_id, 1)
             print(f"🏁 START | {self.car_name} Lap 1/{TOTAL_LAPS}")
             return dict(type='race_start', car_id=self.car_id, car_name=self.car_name, lap=1, time=now)
