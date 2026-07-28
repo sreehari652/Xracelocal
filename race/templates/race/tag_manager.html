@@ -2948,16 +2948,15 @@
       Object.keys(tagData).forEach(tid => { tagData[tid].trail = []; tagData[tid].lapInfo = null; tagData[tid].lapStartTime = null; });
       cpTouches = {}; renderLeaderboard(); renderCpPanel(); refreshCollisionStats(); resetAllEma(); updateButtons(); renderPlayers();
 
-      // 1. Immediately push qualify screen
-      await pushScreen('qualify');
-
-      // 2. 8 seconds later, push standing screen ONLY if it's the finale round
       if (isFinal) {
+        await pushScreen('finale_after');
         setTimeout(async () => {
           if (currentGroupStatus === 'finished') {
             await pushScreen('standing');
           }
         }, 8000);
+      } else {
+        await pushScreen('qualify');
       }
     }
 
@@ -3446,13 +3445,15 @@
       updateButtons();
       renderPlayers();
 
-      await pushScreen('qualify');
       if (isFinal) {
+        await pushScreen('finale_after');
         setTimeout(async () => {
           if (currentGroupStatus === 'finished') {
             await pushScreen('standing');
           }
         }, 8000);
+      } else {
+        await pushScreen('qualify');
       }
     }
 
